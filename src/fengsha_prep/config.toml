@@ -1,0 +1,14 @@
+[bnu_data]
+# Please replace these placeholder URLs with the actual download links.
+sand_urls = [
+  "http://example.com/path/to/sand/data1.nc",
+  "http://example.com/path/to/sand/data2.nc",
+]
+silt_urls = [
+  "http://example.com/path/to/silt/data1.nc",
+  "http://example.com/path/to/silt/data2.nc",
+]
+clay_urls = [
+  "http://example.com/path/to/clay/data1.nc",
+  "http://example.com/path/to/clay/data2.nc",
+]
