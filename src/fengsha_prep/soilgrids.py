@@ -4,9 +4,9 @@ This module provides functions to retrieve soil data from SoilGrids.
 
 from soilgrids import SoilGrids
 
-def get_soilgrids_data(service_id, coverage_id, west, south, east, north, crs, output):
+def get_soilgrids_data(service_id, coverage_id, west, south, east, north, crs, output_path):
     """
-    Retrieves soil data from SoilGrids for a given area.
+    Retrieves soil data from SoilGrids for a given area and saves it as a compressed NetCDF file.
 
     Args:
         service_id (str): The service ID for the soil property.
@@ -16,7 +16,7 @@ def get_soilgrids_data(service_id, coverage_id, west, south, east, north, crs, o
         east (float): The eastern boundary of the area.
         north (float): The northern boundary of the area.
         crs (str): The coordinate reference system.
-        output (str): The path to the output file.
+        output_path (str): The path to the output NetCDF file.
 
     Returns:
         xarray.DataArray: The soil data as an xarray DataArray.
@@ -30,6 +30,12 @@ def get_soilgrids_data(service_id, coverage_id, west, south, east, north, crs, o
         east=east,
         north=north,
         crs=crs,
-        output=output
     )
+
+    # Define compression encoding
+    encoding = {data.name: {"zlib": True, "complevel": 5}}
+
+    # Save to compressed NetCDF
+    data.to_netcdf(output_path, encoding=encoding)
+
     return data

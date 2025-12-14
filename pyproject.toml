@@ -7,11 +7,14 @@ name = "fengsha_prep"
 version = "0.0.1"
 description = "Tools to retrieve and process inputs needed for the noaa fengsha dust emission model"
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.11"
 dependencies = [
     "soilgrids",
-    "tomli",
     "requests",
+    "xarray",
+    "netcdf4",
+    "xesmf",
+    "numpy",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
