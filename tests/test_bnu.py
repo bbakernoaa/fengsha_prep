@@ -1,65 +1,93 @@
 """
 Tests for the bnu module.
 """
-
-import unittest
-from unittest.mock import patch, MagicMock
-from src.fengsha_prep import bnu
-import os
 import shutil
+import unittest
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
-class TestBnu(unittest.TestCase):
+from src.fengsha_prep import bnu
+
+
+class TestBnu(unittest.IsolatedAsyncioTestCase):
     """
     Tests for the bnu module.
     """
+
     def setUp(self):
-        self.output_dir = 'test_bnu_data'
-        if not os.path.exists(self.output_dir):
-            os.makedirs(self.output_dir)
+        self.output_dir = Path("test_bnu_data")
+        self.output_dir.mkdir(exist_ok=True)
 
     def tearDown(self):
-        if os.path.exists(self.output_dir):
+        if self.output_dir.exists():
             shutil.rmtree(self.output_dir)
 
-    @patch('src.fengsha_prep.bnu.requests.get')
-    @patch('src.fengsha_prep.bnu.tomllib.load')
-    def test_get_bnu_data_with_mock_config(self, mock_load, mock_get):
+    @patch("src.fengsha_prep.bnu.tomllib.load")
+    @patch("aiohttp.ClientSession", new_callable=MagicMock)
+    async def test_get_bnu_data_with_mock_config(
+        self, MockClientSession: MagicMock, mock_load: MagicMock
+    ):
         """
-        Tests the get_bnu_data function with a mocked config file.
+        Tests the get_bnu_data function with a correctly mocked aiohttp session.
+        This version uses a more explicit mocking strategy to avoid TypeErrors.
         """
-        # Mock the config file
-        mock_config = {
-            'bnu_data': {
-                'sand_urls': [
+        # 1. Mock the config file loading
+        mock_load.return_value = {
+            "bnu_data": {
+                "sand_urls": [
                     "http://not-a-real-site.com/sand1.nc",
-                    "http://example.com/sand2.nc" # Keep one placeholder to test both paths
+                    "http://example.com/sand2.nc",  # Placeholder to test both paths
                 ]
             }
         }
-        mock_load.return_value = mock_config
 
-        # Mock the requests.get call
-        mock_response = MagicMock()
+        # 2. Create the mock response object.
+        mock_response = AsyncMock()
         mock_response.raise_for_status.return_value = None
-        mock_response.iter_content.return_value = [b'chunk1', b'chunk2']
-        mock_get.return_value.__enter__.return_value = mock_response
+        mock_response.read.return_value = b"test content"
 
-        # Call the function
-        downloaded_files = bnu.get_bnu_data('sand', output_dir=self.output_dir)
+        # This is the async context manager that session.get() returns.
+        mock_response_context = AsyncMock()
+        mock_response_context.__aenter__.return_value = mock_response
+
+        # 3. Create the mock session object.
+        mock_session = AsyncMock()
+        # CRITICAL FIX: session.get is a regular method returning an async context manager.
+        # We use a MagicMock here to prevent it from being a coroutine itself.
+        mock_session.get = MagicMock(return_value=mock_response_context)
+
+        # 4. Create the top-level async context manager for `aiohttp.ClientSession()`
+        mock_session_context = AsyncMock()
+        mock_session_context.__aenter__.return_value = mock_session
+        MockClientSession.return_value = mock_session_context
+
+        # Call the asynchronous function
+        downloaded_files = await bnu.get_bnu_data(
+            "sand", output_dir=str(self.output_dir)
+        )
+
+        # Sort paths to ensure consistent order for comparison
+        downloaded_files.sort(key=lambda p: p.name)
 
         # Assert that the correct files were "downloaded"
         expected_files = [
-            os.path.join(self.output_dir, 'sand1.nc'),
-            os.path.join(self.output_dir, 'sand2.nc')
+            self.output_dir / "sand1.nc",
+            self.output_dir / "sand2.nc",
         ]
-        self.assertEqual(downloaded_files, expected_files)
+        expected_files.sort(key=lambda p: p.name)
+        self.assertEqual([str(p) for p in downloaded_files], [str(p) for p in expected_files])
 
-        # Check that the real download path was called
-        mock_get.assert_called_once_with("http://not-a-real-site.com/sand1.nc", stream=True)
+        # Check that the download URL was called
+        mock_session.get.assert_called_once_with("http://not-a-real-site.com/sand1.nc")
 
-        # Check that a file was created for the placeholder URL
-        self.assertTrue(os.path.exists(expected_files[1]))
+        # Check that files were created and have the correct content
+        sand1_path = self.output_dir / "sand1.nc"
+        sand2_path = self.output_dir / "sand2.nc"
+        self.assertTrue(sand1_path.exists())
+        self.assertEqual(sand1_path.read_bytes(), b"test content")
+        self.assertTrue(sand2_path.exists())
+        self.assertIn("dummy file", sand2_path.read_text())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
