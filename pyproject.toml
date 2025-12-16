@@ -15,6 +15,9 @@ dependencies = [
     "netcdf4",
     "xesmf",
     "numpy",
+    "pandas",
+    "satpy",
+    "scikit-learn",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",

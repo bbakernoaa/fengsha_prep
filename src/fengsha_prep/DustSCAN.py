@@ -1,178 +1,242 @@
-import os
-import glob
 import datetime
-import pandas as pd
+import glob
+import logging
+from typing import List, Dict, Any, Optional
+
 import numpy as np
+import pandas as pd
 import xarray as xr
 from satpy import Scene
 from sklearn.cluster import DBSCAN
-from dask.diagnostics import ProgressBar
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
-# Select Satellite: 'goes16', 'goes17', 'goes18', 'himawari8', 'himawari9', 'seviri'
-SAT_ID = 'goes16' 
-REGION = 'meso'  # 'meso' (Mesoscale - high res), 'conus' (USA), 'full' (Full Disk)
-START_TIME = datetime.datetime(2023, 4, 1, 18, 0) # Example: April 1, 2023 (Spring Dust Season)
-END_TIME = datetime.datetime(2023, 4, 1, 20, 0)   # Short window for testing
+SAT_ID = 'goes16'
+REGION = 'meso'
+START_TIME = datetime.datetime(2023, 4, 1, 18, 0)
+END_TIME = datetime.datetime(2023, 4, 1, 20, 0)
 OUTPUT_CSV = 'dust_events_catalog.csv'
-
-# Dust Detection Thresholds (Based on standard EUMETSAT/NASA Dust RGB recipes)
-# These may need fine-tuning for specific regions (e.g., US SW vs Sahara)
 THRESHOLDS = {
-    'diff_12_10': -0.5,   # Brightness Temp Difference (12.0 - 10.8 microns) -> Negative for dust
-    'diff_10_8': 2.0,     # Brightness Temp Difference (10.8 - 8.7 microns) -> High for dust
-    'temp_10': 280        # Minimum temperature (Kelvin) to filter out cold high clouds
+    'diff_12_10': -0.5,
+    'diff_10_8': 2.0,
+    'temp_10': 280
 }
 
-# ==========================================
-# 1. AUTOMATED DATA FETCHING (Using Satpy + S3)
-# ==========================================
-def get_file_pattern(sat_id):
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+def get_file_pattern(sat_id: str) -> str:
+    """
+    Gets the satpy reader name for a given satellite.
+
+    Args:
+        sat_id: The identifier of the satellite (e.g., 'goes16').
+
+    Returns:
+        The corresponding satpy reader name.
+
+    Raises:
+        ValueError: If the satellite is not supported.
+    """
     if 'goes' in sat_id:
-        return 'abi_l1b' # Reader for GOES ABI
+        return 'abi_l1b'
     elif 'himawari' in sat_id:
-        return 'ahi_hsd' # Reader for Himawari AHI
+        return 'ahi_hsd'
     elif 'seviri' in sat_id:
         return 'seviri_l1b_native'
     else:
         raise ValueError("Unsupported satellite.")
 
-def process_scene(scn_time):
+
+def load_scene_data(scn_time: datetime.datetime, sat_id: str) -> Optional[Scene]:
     """
-    Loads, processes, and detects dust for a single timestamp.
+    Loads and preprocesses satellite data for a single timestamp.
+
+    This function finds the relevant satellite data file(s) for a given time,
+    loads them into a Satpy Scene object, loads the required bands, and
+    resamples the scene to a common grid.
+
+    Args:
+        scn_time: The timestamp for which to load data.
+        sat_id: The identifier of the satellite.
+
+    Returns:
+        A preprocessed Satpy Scene object, or None if no files are found.
     """
-    try:
-        # Satpy can automatically find files in S3 buckets if configured, 
-        # but for simplicity, we assume local files or use satpy's 'find_files_and_readers'
-        # In a real automated pipeline, you would use s3fs to download the specific timestep here.
-        
-        # NOTE: For this snippet to run immediately, you need actual files. 
-        # Automated downloading is complex to script concisely, but Satpy has tools for it.
-        # Here we assume you point to a directory of downloaded files:
-        files = glob.glob(f'data/*{scn_time.strftime("%Y%j%H%M")}*.nc') 
-        
-        if not files:
-            print(f"No files found for {scn_time}")
-            return None
-
-        reader = get_file_pattern(SAT_ID)
-        scn = Scene(filenames=files, reader=reader)
-
-        # Load standard Dust RGB bands (8.7, 10.8, 12.0 micron)
-        # Satpy channel names vary: 'C11', 'C13', 'C15' for GOES roughly match 8.4, 10.3, 12.3
-        if 'goes' in SAT_ID:
-             bands = ['C11', 'C13', 'C15'] # 8.4um, 10.3um, 12.3um
-        elif 'himawari' in SAT_ID:
-             bands = ['B11', 'B13', 'B15'] # Similar mapping
-        
-        scn.load(bands)
-        
-        # Resample to common grid (performant)
-        # 'native' is fastest, but '2km' might be needed if bands differ
-        scn = scn.resample(resampler='native') 
-
-        # ==========================================
-        # 2. PHYSICAL DUST DETECTION ALGORITHM
-        # ==========================================
-        # Extract DataArrays
-        if 'goes' in SAT_ID:
-            # Band mapping for GOES ABI
-            # C11 ~ 8.4um, C13 ~ 10.3um, C15 ~ 12.3um
-            b08 = scn['C11']
-            b10 = scn['C13']
-            b12 = scn['C15']
-        
-        # Calculate Split Window Differences (The core physics)
-        # Dust typically has NEGATIVE (12-10) and HIGH (10-8)
-        diff_12_10 = b12 - b10
-        diff_10_8 = b10 - b08
-        
-        # Create Binary Mask (1 = Dust, 0 = No Dust)
-        # Optimized with Dask (lazy evaluation)
-        dust_mask = (
-            (diff_12_10 < THRESHOLDS['diff_12_10']) & 
-            (diff_10_8 > THRESHOLDS['diff_10_8']) & 
-            (b10 > THRESHOLDS['temp_10'])
-        )
-
-        # ==========================================
-        # 3. CLUSTERING (Object Identification)
-        # ==========================================
-        # We must compute() here to get numpy array for DBSCAN
-        # limiting to valid data to save memory
-        valid_pixels = dust_mask.where(dust_mask, drop=True)
-        
-        if valid_pixels.size == 0:
-            return []
-
-        # Get coordinates of dust pixels
-        # stack lat/lon into a list of (lat, lon) points
-        coords = np.column_stack((valid_pixels.y.values, valid_pixels.x.values))
-        
-        # Run DBSCAN
-        # eps=0.05 degrees (~5km), min_samples=10 pixels (~40km2 area)
-        # This groups nearby pixels into "Events"
-        db = DBSCAN(eps=0.05, min_samples=10, metric='euclidean').fit(coords)
-        
-        labels = db.labels_
-        unique_labels = set(labels)
-        
-        events = []
-        for k in unique_labels:
-            if k == -1: continue # Noise
-            
-            # Extract points for this cluster
-            class_member_mask = (labels == k)
-            xy = coords[class_member_mask]
-            
-            # Centroid
-            lat_mean = np.mean(xy[:, 0])
-            lon_mean = np.mean(xy[:, 1])
-            area_px = len(xy)
-            
-            # Get actual Lat/Lon from projection y/x if needed (Satpy handles this)
-            # For simplicity, assuming x/y are already lat/lon or easily converted
-            # If projection coordinates, use scn[band].attrs['area'].get_lonlat(row, col)
-            
-            events.append({
-                'datetime': scn_time,
-                'latitude': float(lat_mean),
-                'longitude': float(lon_mean),
-                'area_pixels': int(area_px),
-                'satellite': SAT_ID
-            })
-            
-        return events
-
-    except Exception as e:
-        print(f"Error processing {scn_time}: {e}")
+    files = glob.glob(f'data/*{scn_time.strftime("%Y%j%H%M")}*.nc')
+    if not files:
+        logging.warning(f"No files found for {scn_time}")
         return None
 
-# ==========================================
-# MAIN EXECUTION LOOP
-# ==========================================
-all_events = []
-current_time = START_TIME
+    reader = get_file_pattern(sat_id)
+    scn = Scene(filenames=files, reader=reader)
 
-print(f"Starting analysis for {SAT_ID}...")
+    if 'goes' in sat_id:
+        bands = ['C11', 'C13', 'C15']
+    elif 'himawari' in sat_id:
+        bands = ['B11', 'B13', 'B15']
+    else:
+        raise NotImplementedError(f"Band mapping for {sat_id} not implemented.")
 
-while current_time <= END_TIME:
-    print(f"Processing {current_time}...")
-    events = process_scene(current_time)
-    
-    if events:
-        all_events.extend(events)
-        print(f"  Found {len(events)} dust plumes.")
-    
-    # GOES provides data every 10-15 mins
-    current_time += datetime.timedelta(minutes=15)
+    scn.load(bands)
+    return scn.resample(resampler='native')
 
-# Save Results
-if all_events:
-    df = pd.DataFrame(all_events)
-    df.to_csv(OUTPUT_CSV, index=False)
-    print(f"Success! Saved {len(df)} events to {OUTPUT_CSV}")
-else:
-    print("No dust events detected in this period.")
+
+def detect_dust(scn: Scene, sat_id: str, thresholds: Dict[str, float]) -> xr.DataArray:
+    """
+    Applies a physical algorithm to detect dust in a scene.
+
+    This algorithm is based on the brightness temperature differences between
+    infrared channels, a common technique for identifying dust aerosols.
+
+    Args:
+        scn: The Satpy Scene object containing the satellite data.
+        sat_id: The identifier of the satellite.
+        thresholds: A dictionary of thresholds used for dust detection.
+
+    Returns:
+        An xarray DataArray representing the binary dust mask (1=Dust, 0=No Dust).
+    """
+    if 'goes' in sat_id:
+        b08 = scn['C11']
+        b10 = scn['C13']
+        b12 = scn['C15']
+    else:
+        raise NotImplementedError(f"Dust detection for {sat_id} not implemented.")
+
+    diff_12_10 = b12 - b10
+    diff_10_8 = b10 - b08
+
+    dust_mask = (
+            (diff_12_10 < thresholds['diff_12_10']) &
+            (diff_10_8 > thresholds['diff_10_8']) &
+            (b10 > thresholds['temp_10'])
+    )
+    return dust_mask
+
+
+def cluster_events(dust_mask: xr.DataArray, scn_time: datetime.datetime, sat_id: str) -> List[Dict[str, Any]]:
+    """
+    Identifies distinct dust plumes from a dust mask using DBSCAN.
+
+    This function takes a binary dust mask, extracts the coordinates of the
+    dusty pixels, and uses the DBSCAN clustering algorithm to group them into
+    distinct events or plumes.
+
+    Args:
+        dust_mask: The binary dust mask DataArray.
+        scn_time: The timestamp of the scene.
+        sat_id: The identifier of the satellite.
+
+    Returns:
+        A list of dictionaries, where each dictionary represents a detected
+        dust event with its properties (centroid, area, etc.).
+    """
+    valid_pixels = dust_mask.where(dust_mask, drop=True)
+    if valid_pixels.size == 0:
+        return []
+
+    # This is the critical fix: use geographic lat/lon coordinates for clustering.
+    lats = valid_pixels.lat.values
+    lons = valid_pixels.lon.values
+    coords_deg = np.column_stack((lats, lons))
+
+    # For accurate geographic clustering, we use the haversine metric, which
+    # requires coordinates in radians.
+    coords_rad = np.radians(coords_deg)
+
+    # DBSCAN eps is the search radius. For haversine, it's in radians.
+    # We want a radius of ~5km. Earth's radius is ~6371 km.
+    # eps = 5 km / 6371 km
+    earth_radius_km = 6371
+    eps_km = 5
+    eps_rad = eps_km / earth_radius_km
+
+    db = DBSCAN(eps=eps_rad, min_samples=10, metric='haversine').fit(coords_rad)
+    labels = db.labels_
+    unique_labels = set(labels)
+
+    events = []
+    for k in unique_labels:
+        if k == -1:  # -1 is noise in DBSCAN
+            continue
+
+        class_member_mask = (labels == k)
+        # We use the original degree coordinates for calculating the centroid
+        cluster_coords_deg = coords_deg[class_member_mask]
+
+        # Calculate the centroid of the cluster in degrees
+        lat_mean = np.mean(cluster_coords_deg[:, 0])
+        lon_mean = np.mean(cluster_coords_deg[:, 1])
+        area_px = len(cluster_coords_deg)
+
+        events.append({
+            'datetime': scn_time,
+            'latitude': float(lat_mean),
+            'longitude': float(lon_mean),
+            'area_pixels': int(area_px),
+            'satellite': sat_id
+        })
+    return events
+
+
+def process_scene(scn_time: datetime.datetime, sat_id: str, thresholds: Dict[str, float]) -> Optional[List[Dict[str, Any]]]:
+    """
+    Orchestrates the processing of a single satellite scene.
+
+    This function handles the loading of data, detection of dust, and
+    clustering of dust events for a single timestamp.
+
+    Args:
+        scn_time: The timestamp of the scene to process.
+        sat_id: The identifier of the satellite.
+        thresholds: A dictionary of thresholds for dust detection.
+
+    Returns:
+        A list of detected dust events, or None if an error occurs.
+    """
+    try:
+        scn = load_scene_data(scn_time, sat_id)
+        if scn is None:
+            return None
+
+        dust_mask = detect_dust(scn, sat_id, thresholds)
+        events = cluster_events(dust_mask, scn_time, sat_id)
+        return events
+    except Exception as e:
+        logging.error(f"Error processing {scn_time}: {e}")
+        return None
+
+
+def main() -> None:
+    """
+    Main execution loop for dust detection.
+
+    This function iterates through a time range, processes each satellite
+    scene, and saves the detected dust events to a CSV file.
+    """
+    all_events: List[Dict[str, Any]] = []
+    current_time = START_TIME
+    logging.info(f"Starting analysis for {SAT_ID}...")
+
+    while current_time <= END_TIME:
+        logging.info(f"Processing {current_time}...")
+        events = process_scene(current_time, SAT_ID, THRESHOLDS)
+
+        if events:
+            all_events.extend(events)
+            logging.info(f"  Found {len(events)} dust plumes.")
+
+        current_time += datetime.timedelta(minutes=15)
+
+    if all_events:
+        df = pd.DataFrame(all_events)
+        df.to_csv(OUTPUT_CSV, index=False)
+        logging.info(f"Success! Saved {len(df)} events to {OUTPUT_CSV}")
+    else:
+        logging.info("No dust events detected in this period.")
+
+
+if __name__ == "__main__":
+    main()
