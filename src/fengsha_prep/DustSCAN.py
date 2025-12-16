@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import glob
 import logging
@@ -181,12 +182,13 @@ def cluster_events(dust_mask: xr.DataArray, scn_time: datetime.datetime, sat_id:
     return events
 
 
-def process_scene(scn_time: datetime.datetime, sat_id: str, thresholds: Dict[str, float]) -> Optional[List[Dict[str, Any]]]:
+async def process_scene(scn_time: datetime.datetime, sat_id: str, thresholds: Dict[str, float]) -> Optional[List[Dict[str, Any]]]:
     """
-    Orchestrates the processing of a single satellite scene.
+    Orchestrates the processing of a single satellite scene asynchronously.
 
     This function handles the loading of data, detection of dust, and
-    clustering of dust events for a single timestamp.
+    clustering of dust events for a single timestamp. Heavy lifting is done
+    in a separate thread to avoid blocking the asyncio event loop.
 
     Args:
         scn_time: The timestamp of the scene to process.
@@ -197,38 +199,59 @@ def process_scene(scn_time: datetime.datetime, sat_id: str, thresholds: Dict[str
         A list of detected dust events, or None if an error occurs.
     """
     try:
-        scn = load_scene_data(scn_time, sat_id)
-        if scn is None:
-            return None
-
-        dust_mask = detect_dust(scn, sat_id, thresholds)
-        events = cluster_events(dust_mask, scn_time, sat_id)
-        return events
+        # Run synchronous, CPU-bound code in a separate thread
+        return await asyncio.to_thread(
+            _process_scene_sync, scn_time, sat_id, thresholds
+        )
     except Exception as e:
         logging.error(f"Error processing {scn_time}: {e}")
         return None
 
 
-def main() -> None:
-    """
-    Main execution loop for dust detection.
+def _process_scene_sync(
+    scn_time: datetime.datetime, sat_id: str, thresholds: Dict[str, float]
+) -> Optional[List[Dict[str, Any]]]:
+    """Synchronous helper function for scene processing."""
+    scn = load_scene_data(scn_time, sat_id)
+    if scn is None:
+        return None
 
-    This function iterates through a time range, processes each satellite
-    scene, and saves the detected dust events to a CSV file.
+    dust_mask = detect_dust(scn, sat_id, thresholds)
+    events = cluster_events(dust_mask, scn_time, sat_id)
+    return events
+
+
+async def main() -> None:
     """
+    Main execution loop for concurrent dust detection.
+
+    This function iterates through a time range, creates concurrent tasks for
+    processing each satellite scene, and saves the detected dust events to a CSV.
+    It uses a semaphore to limit the number of concurrent processes to avoid
+    overwhelming the system.
+    """
+    # Create a semaphore to limit concurrency to a reasonable number
+    semaphore = asyncio.Semaphore(10)
     all_events: List[Dict[str, Any]] = []
+    tasks = []
     current_time = START_TIME
-    logging.info(f"Starting analysis for {SAT_ID}...")
+    logging.info(f"Starting analysis for {SAT_ID} with bounded concurrency...")
+
+    async def worker(scn_time: datetime.datetime):
+        """Acquires semaphore and runs the scene processing."""
+        async with semaphore:
+            logging.info(f"Processing {scn_time}...")
+            events = await process_scene(scn_time, SAT_ID, THRESHOLDS)
+            if events:
+                all_events.extend(events)
+                logging.info(f"  Found {len(events)} dust plumes at {scn_time}.")
 
     while current_time <= END_TIME:
-        logging.info(f"Processing {current_time}...")
-        events = process_scene(current_time, SAT_ID, THRESHOLDS)
-
-        if events:
-            all_events.extend(events)
-            logging.info(f"  Found {len(events)} dust plumes.")
-
+        task = asyncio.create_task(worker(current_time))
+        tasks.append(task)
         current_time += datetime.timedelta(minutes=15)
+
+    await asyncio.gather(*tasks)
 
     if all_events:
         df = pd.DataFrame(all_events)
@@ -239,4 +262,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

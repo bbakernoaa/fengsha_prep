@@ -1,8 +1,12 @@
+import datetime
 import unittest
-from unittest.mock import MagicMock
-import xarray as xr
+from unittest.mock import MagicMock, patch
+
 import numpy as np
-from src.fengsha_prep.DustSCAN import detect_dust
+import xarray as xr
+
+from src.fengsha_prep.DustSCAN import detect_dust, process_scene
+
 
 class TestDustScan(unittest.TestCase):
 
@@ -51,6 +55,57 @@ class TestDustScan(unittest.TestCase):
         # Check that the dust mask has the correct values
         self.assertTrue(np.all(dust_mask.values[5:, 5:] == True))
         self.assertTrue(np.all(dust_mask.values[:5, :5] == False))
+
+
+class TestAsyncDustScan(unittest.IsolatedAsyncioTestCase):
+    @patch('src.fengsha_prep.DustSCAN._process_scene_sync')
+    async def test_process_scene_success(self, mock_sync_processor):
+        """
+        Test the async process_scene function for a successful run.
+        """
+        # --- Mock Setup ---
+        mock_scn_time = datetime.datetime(2023, 1, 1, 12, 0)
+        mock_sat_id = 'goes16'
+        mock_thresholds = {'key': 'value'}
+        expected_events = [
+            {'lat': 34.5, 'lon': -101.2, 'area': 50},
+            {'lat': 35.1, 'lon': -102.5, 'area': 120}
+        ]
+        # The function called by asyncio.to_thread is _process_scene_sync
+        mock_sync_processor.return_value = expected_events
+
+        # --- Call the async function ---
+        events = await process_scene(mock_scn_time, mock_sat_id, mock_thresholds)
+
+        # --- Assertions ---
+        # Check that our synchronous helper was called correctly
+        mock_sync_processor.assert_called_once_with(
+            mock_scn_time, mock_sat_id, mock_thresholds
+        )
+        # Check that the events are returned as expected
+        self.assertEqual(events, expected_events)
+
+    @patch('src.fengsha_prep.DustSCAN._process_scene_sync')
+    async def test_process_scene_exception(self, mock_sync_processor):
+        """
+        Test the async process_scene function when an exception occurs.
+        """
+        # --- Mock Setup ---
+        mock_scn_time = datetime.datetime(2023, 1, 1, 12, 0)
+        mock_sat_id = 'goes16'
+        mock_thresholds = {'key': 'value'}
+        mock_sync_processor.side_effect = Exception("Something went wrong")
+
+        # --- Call the async function ---
+        # We expect it to catch the exception and return None
+        events = await process_scene(mock_scn_time, mock_sat_id, mock_thresholds)
+
+        # --- Assertions ---
+        mock_sync_processor.assert_called_once_with(
+            mock_scn_time, mock_sat_id, mock_thresholds
+        )
+        self.assertIsNone(events)
+
 
 if __name__ == '__main__':
     unittest.main()
