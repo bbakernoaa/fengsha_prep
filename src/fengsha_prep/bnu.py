@@ -45,7 +45,9 @@ async def _download_file(
 
 
 async def get_bnu_data(
-    data_type: str, output_dir: str = "bnu_data"
+    data_type: str,
+    output_dir: str = "bnu_data",
+    concurrency_limit: int = 10,
 ) -> List[Path]:
     """
     Asynchronously retrieves soil data from the BNU soil dataset by downloading
@@ -54,6 +56,7 @@ async def get_bnu_data(
     Args:
         data_type: The type of data to retrieve (e.g., 'sand', 'silt', 'clay').
         output_dir: The directory where the downloaded files will be saved.
+        concurrency_limit: The maximum number of concurrent downloads.
 
     Returns:
         A list of file paths for the downloaded data.
@@ -68,8 +71,14 @@ async def get_bnu_data(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    tasks = []
+    semaphore = asyncio.Semaphore(concurrency_limit)
     placeholder_files: List[Path] = []
+    tasks = []
+
+    async def worker(session: aiohttp.ClientSession, url: str, filepath: Path):
+        """Acquires semaphore and runs the download task."""
+        async with semaphore:
+            return await _download_file(session, url, filepath)
 
     async with aiohttp.ClientSession() as session:
         for url in urls:
@@ -83,10 +92,10 @@ async def get_bnu_data(
                 placeholder_files.append(filepath)
                 continue
 
-            task = asyncio.create_task(_download_file(session, url, filepath))
+            task = asyncio.create_task(worker(session, url, filepath))
             tasks.append(task)
 
-    results = await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks)
     successful_downloads = [res for res in results if res is not None]
 
     return placeholder_files + successful_downloads
@@ -102,11 +111,13 @@ if __name__ == "__main__":
     # Example of how to run the asynchronous function
     async def main():
         logger.info("--- Downloading Sand Data ---")
+        # Example with default concurrency limit
         sand_files = await get_bnu_data("sand")
         logger.info(f"Downloaded sand files: {sand_files}")
 
-        logger.info("\n--- Downloading Silt Data ---")
-        silt_files = await get_bnu_data("silt")
+        logger.info("\n--- Downloading Silt Data (with a limit of 5) ---")
+        # Example with a custom concurrency limit
+        silt_files = await get_bnu_data("silt", concurrency_limit=5)
         logger.info(f"Downloaded silt files: {silt_files}")
 
     asyncio.run(main())

@@ -18,6 +18,7 @@ dependencies = [
     "pandas",
     "satpy",
     "scikit-learn",
+    "aiohttp",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
