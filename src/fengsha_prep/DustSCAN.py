@@ -10,15 +10,8 @@ import xarray as xr
 from satpy import Scene
 from sklearn.cluster import DBSCAN
 
-# ==========================================
-# CONFIGURATION
-# ==========================================
-SAT_ID = 'goes16'
-REGION = 'meso'
-START_TIME = datetime.datetime(2023, 4, 1, 18, 0)
-END_TIME = datetime.datetime(2023, 4, 1, 20, 0)
-OUTPUT_CSV = 'dust_events_catalog.csv'
-THRESHOLDS = {
+# Default thresholds for dust detection, can be overridden.
+DEFAULT_THRESHOLDS = {
     'diff_12_10': -0.5,
     'diff_10_8': 2.0,
     'temp_10': 280
@@ -138,9 +131,10 @@ def cluster_events(dust_mask: xr.DataArray, scn_time: datetime.datetime, sat_id:
     if valid_pixels.size == 0:
         return []
 
-    # This is the critical fix: use geographic lat/lon coordinates for clustering.
-    lats = valid_pixels.lat.values
-    lons = valid_pixels.lon.values
+    # Explicitly flatten the coordinates to ensure they are 1D arrays,
+    # which is required for np.column_stack to produce a (N, 2) array.
+    lats = valid_pixels.lat.values.ravel()
+    lons = valid_pixels.lon.values.ravel()
     coords_deg = np.column_stack((lats, lons))
 
     # For accurate geographic clustering, we use the haversine metric, which
@@ -160,14 +154,12 @@ def cluster_events(dust_mask: xr.DataArray, scn_time: datetime.datetime, sat_id:
 
     events = []
     for k in unique_labels:
-        if k == -1:  # -1 is noise in DBSCAN
+        if k == -1:
             continue
 
         class_member_mask = (labels == k)
-        # We use the original degree coordinates for calculating the centroid
         cluster_coords_deg = coords_deg[class_member_mask]
 
-        # Calculate the centroid of the cluster in degrees
         lat_mean = np.mean(cluster_coords_deg[:, 0])
         lon_mean = np.mean(cluster_coords_deg[:, 1])
         area_px = len(cluster_coords_deg)
@@ -180,32 +172,6 @@ def cluster_events(dust_mask: xr.DataArray, scn_time: datetime.datetime, sat_id:
             'satellite': sat_id
         })
     return events
-
-
-async def process_scene(scn_time: datetime.datetime, sat_id: str, thresholds: Dict[str, float]) -> Optional[List[Dict[str, Any]]]:
-    """
-    Orchestrates the processing of a single satellite scene asynchronously.
-
-    This function handles the loading of data, detection of dust, and
-    clustering of dust events for a single timestamp. Heavy lifting is done
-    in a separate thread to avoid blocking the asyncio event loop.
-
-    Args:
-        scn_time: The timestamp of the scene to process.
-        sat_id: The identifier of the satellite.
-        thresholds: A dictionary of thresholds for dust detection.
-
-    Returns:
-        A list of detected dust events, or None if an error occurs.
-    """
-    try:
-        # Run synchronous, CPU-bound code in a separate thread
-        return await asyncio.to_thread(
-            _process_scene_sync, scn_time, sat_id, thresholds
-        )
-    except Exception as e:
-        logging.error(f"Error processing {scn_time}: {e}")
-        return None
 
 
 def _process_scene_sync(
@@ -221,32 +187,58 @@ def _process_scene_sync(
     return events
 
 
-async def main() -> None:
+async def process_scene(scn_time: datetime.datetime, sat_id: str, thresholds: Dict[str, float]) -> Optional[List[Dict[str, Any]]]:
     """
-    Main execution loop for concurrent dust detection.
+    Orchestrates the processing of a single satellite scene asynchronously.
+    """
+    try:
+        return await asyncio.to_thread(
+            _process_scene_sync, scn_time, sat_id, thresholds
+        )
+    except Exception as e:
+        logging.error(f"Error processing {scn_time}: {e}")
+        return None
 
-    This function iterates through a time range, creates concurrent tasks for
-    processing each satellite scene, and saves the detected dust events to a CSV.
-    It uses a semaphore to limit the number of concurrent processes to avoid
-    overwhelming the system.
+
+async def run_dust_scan_in_period(
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    sat_id: str,
+    output_csv: str,
+    thresholds: Dict[str, float] = None,
+    concurrency_limit: int = 10
+) -> None:
     """
-    # Create a semaphore to limit concurrency to a reasonable number
-    semaphore = asyncio.Semaphore(10)
+    Main execution loop for concurrent dust detection over a time period.
+
+    Args:
+        start_time: The start of the time range to analyze.
+        end_time: The end of the time range to analyze.
+        sat_id: The identifier of the satellite (e.g., 'goes16').
+        output_csv: Path to save the resulting CSV file.
+        thresholds: Dictionary of thresholds for dust detection. Uses DEFAULT_THRESHOLDS if None.
+        concurrency_limit: The maximum number of concurrent scene processing tasks.
+    """
+    if thresholds is None:
+        thresholds = DEFAULT_THRESHOLDS
+
+    semaphore = asyncio.Semaphore(concurrency_limit)
     all_events: List[Dict[str, Any]] = []
     tasks = []
-    current_time = START_TIME
-    logging.info(f"Starting analysis for {SAT_ID} with bounded concurrency...")
+    current_time = start_time
+
+    logging.info(f"Starting analysis for {sat_id} from {start_time} to {end_time}...")
 
     async def worker(scn_time: datetime.datetime):
         """Acquires semaphore and runs the scene processing."""
         async with semaphore:
             logging.info(f"Processing {scn_time}...")
-            events = await process_scene(scn_time, SAT_ID, THRESHOLDS)
+            events = await process_scene(scn_time, sat_id, thresholds)
             if events:
                 all_events.extend(events)
                 logging.info(f"  Found {len(events)} dust plumes at {scn_time}.")
 
-    while current_time <= END_TIME:
+    while current_time <= end_time:
         task = asyncio.create_task(worker(current_time))
         tasks.append(task)
         current_time += datetime.timedelta(minutes=15)
@@ -255,11 +247,45 @@ async def main() -> None:
 
     if all_events:
         df = pd.DataFrame(all_events)
-        df.to_csv(OUTPUT_CSV, index=False)
-        logging.info(f"Success! Saved {len(df)} events to {OUTPUT_CSV}")
+        df.to_csv(output_csv, index=False)
+        logging.info(f"Success! Saved {len(df)} events to {output_csv}")
     else:
         logging.info("No dust events detected in this period.")
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Scan satellite data for dust events.")
+    parser.add_argument(
+        '--sat',
+        type=str,
+        default='goes16',
+        help="Satellite ID (e.g., 'goes16')."
+    )
+    parser.add_argument(
+        '--start',
+        type=lambda s: datetime.datetime.strptime(s, '%Y-%m-%dT%H:%M'),
+        required=True,
+        help="Start time in YYYY-MM-DDTHH:MM format."
+    )
+    parser.add_argument(
+        '--end',
+        type=lambda s: datetime.datetime.strptime(s, '%Y-%m-%dT%H:%M'),
+        required=True,
+        help="End time in YYYY-MM-DDTHH:MM format."
+    )
+    parser.add_argument(
+        '--output',
+        type=str,
+        default='dust_events.csv',
+        help="Output CSV file path."
+    )
+    args = parser.parse_args()
+
+    asyncio.run(run_dust_scan_in_period(
+        start_time=args.start,
+        end_time=args.end,
+        sat_id=args.sat,
+        output_csv=args.output
+    ))
