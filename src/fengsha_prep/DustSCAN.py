@@ -10,6 +10,8 @@ import xarray as xr
 from satpy import Scene
 from sklearn.cluster import DBSCAN
 
+from . import goes_s3
+
 # Default thresholds for dust detection, can be overridden.
 DEFAULT_THRESHOLDS = {
     'diff_12_10': -0.5,
@@ -58,18 +60,41 @@ def load_scene_data(scn_time: datetime.datetime, sat_id: str) -> Optional[Scene]
     Returns:
         A preprocessed Satpy Scene object, or None if no files are found.
     """
+    if sat_id in goes_s3.SATELLITE_CONFIG:
+        s3_path = None
+        try:
+            s3_path = goes_s3.get_s3_path(sat_id, scn_time)
+            bands = goes_s3.SATELLITE_BANDS.get(sat_id)
+            if not bands:
+                raise ValueError(f"Band mapping for {sat_id} not implemented.")
+
+            # Satpy automatically uses s3fs for s3:// paths
+            scn = Scene(reader="abi_l1b", filenames=[s3_path])
+            scn.load(bands)
+            return scn.resample(resampler='native')
+        except FileNotFoundError:
+            log_msg = f"No files found on S3 for {scn_time}"
+            if s3_path:
+                log_msg += f" at {s3_path}"
+            logging.warning(log_msg)
+            return None
+        except Exception as e:
+            logging.error(f"Error loading GOES data for {scn_time}: {e}")
+            return None
+
+    # Fallback to local file glob for other satellites
     files = glob.glob(f'data/*{scn_time.strftime("%Y%j%H%M")}*.nc')
     if not files:
-        logging.warning(f"No files found for {scn_time}")
+        logging.warning(f"No local files found for {scn_time}")
         return None
 
     reader = get_file_pattern(sat_id)
     scn = Scene(filenames=files, reader=reader)
 
-    if 'goes' in sat_id:
-        bands = ['C11', 'C13', 'C15']
-    elif 'himawari' in sat_id:
+    if 'himawari' in sat_id:
         bands = ['B11', 'B13', 'B15']
+    elif 'seviri' in sat_id:
+        bands = ['IR_87', 'IR_108', 'IR_120']
     else:
         raise NotImplementedError(f"Band mapping for {sat_id} not implemented.")
 
@@ -92,10 +117,15 @@ def detect_dust(scn: Scene, sat_id: str, thresholds: Dict[str, float]) -> xr.Dat
     Returns:
         An xarray DataArray representing the binary dust mask (1=Dust, 0=No Dust).
     """
-    if 'goes' in sat_id:
-        b08 = scn['C11']
-        b10 = scn['C13']
-        b12 = scn['C15']
+    if sat_id in goes_s3.SATELLITE_CONFIG:
+        bands = goes_s3.SATELLITE_BANDS.get(sat_id)
+        if not bands or len(bands) < 3:
+            raise ValueError(f"Invalid band configuration for {sat_id}")
+        b08, b10, b12 = scn[bands[0]], scn[bands[1]], scn[bands[2]]
+    elif 'himawari' in sat_id:
+        b08, b10, b12 = scn['B11'], scn['B13'], scn['B15']
+    elif 'seviri' in sat_id:
+        b08, b10, b12 = scn['IR_87'], scn['IR_108'], scn['IR_120']
     else:
         raise NotImplementedError(f"Dust detection for {sat_id} not implemented.")
 
