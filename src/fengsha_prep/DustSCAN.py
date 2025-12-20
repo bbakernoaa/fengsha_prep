@@ -204,10 +204,12 @@ def cluster_events(dust_mask: xr.DataArray, scn_time: datetime.datetime, sat_id:
     return events
 
 
-def _process_scene_sync(
+def dust_scan_pipeline(
     scn_time: datetime.datetime, sat_id: str, thresholds: Dict[str, float]
 ) -> Optional[List[Dict[str, Any]]]:
-    """Synchronous helper function for scene processing."""
+    """
+    Orchestrates the dust detection pipeline for a single scene.
+    """
     scn = load_scene_data(scn_time, sat_id)
     if scn is None:
         return None
@@ -223,7 +225,7 @@ async def process_scene(scn_time: datetime.datetime, sat_id: str, thresholds: Di
     """
     try:
         return await asyncio.to_thread(
-            _process_scene_sync, scn_time, sat_id, thresholds
+            dust_scan_pipeline, scn_time, sat_id, thresholds
         )
     except Exception as e:
         logging.error(f"Error processing {scn_time}: {e}")

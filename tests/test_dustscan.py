@@ -4,13 +4,14 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import xarray as xr
+from satpy import Scene
 
 from src.fengsha_prep.DustSCAN import (
     cluster_events,
     detect_dust,
     load_scene_data,
     process_scene,
-    _process_scene_sync
+    dust_scan_pipeline,
 )
 
 
@@ -54,40 +55,37 @@ class TestDustScan(unittest.TestCase):
 
 
 class TestAsyncDustScan(unittest.IsolatedAsyncioTestCase):
-    @patch('src.fengsha_prep.DustSCAN._process_scene_sync')
-    async def test_process_scene_success(self, mock_sync_processor):
+    @patch('src.fengsha_prep.DustSCAN.dust_scan_pipeline')
+    async def test_process_scene_success(self, mock_pipeline):
         """
         Test the async process_scene function for a successful run.
         """
         mock_scn_time = datetime.datetime(2023, 1, 1, 12, 0)
         mock_sat_id = 'goes16'
         mock_thresholds = {'key': 'value'}
-        expected_events = [
-            {'lat': 34.5, 'lon': -101.2, 'area': 50},
-            {'lat': 35.1, 'lon': -102.5, 'area': 120}
-        ]
-        mock_sync_processor.return_value = expected_events
+        expected_events = [{'lat': 34.5, 'lon': -101.2}]
+        mock_pipeline.return_value = expected_events
 
         events = await process_scene(mock_scn_time, mock_sat_id, mock_thresholds)
 
-        mock_sync_processor.assert_called_once_with(
+        mock_pipeline.assert_called_once_with(
             mock_scn_time, mock_sat_id, mock_thresholds
         )
         self.assertEqual(events, expected_events)
 
-    @patch('src.fengsha_prep.DustSCAN._process_scene_sync')
-    async def test_process_scene_exception(self, mock_sync_processor):
+    @patch('src.fengsha_prep.DustSCAN.dust_scan_pipeline')
+    async def test_process_scene_exception(self, mock_pipeline):
         """
         Test the async process_scene function when an exception occurs.
         """
         mock_scn_time = datetime.datetime(2023, 1, 1, 12, 0)
         mock_sat_id = 'goes16'
         mock_thresholds = {'key': 'value'}
-        mock_sync_processor.side_effect = Exception("Something went wrong")
+        mock_pipeline.side_effect = Exception("Pipeline error")
 
         events = await process_scene(mock_scn_time, mock_sat_id, mock_thresholds)
 
-        mock_sync_processor.assert_called_once_with(
+        mock_pipeline.assert_called_once_with(
             mock_scn_time, mock_sat_id, mock_thresholds
         )
         self.assertIsNone(events)
@@ -137,7 +135,7 @@ class TestDustScanIntegration(unittest.TestCase):
             'temp_10': 280
         }
 
-        events = _process_scene_sync(scn_time, sat_id, thresholds)
+        events = dust_scan_pipeline(scn_time, sat_id, thresholds)
 
         mock_goes_s3.get_s3_path.assert_called_once_with(sat_id, scn_time)
         mock_scene_cls.assert_called_once_with(reader='abi_l1b', filenames=[mock_s3_path])
@@ -180,6 +178,35 @@ class TestDustScanIntegration(unittest.TestCase):
         mock_glob.glob.assert_called_once()
         mock_scene_cls.assert_called_once_with(filenames=['data/himawari_file.nc'], reader='ahi_hsd')
         mock_scene_instance.load.assert_called_once_with(['B11', 'B13', 'B15'])
+
+    @patch('src.fengsha_prep.DustSCAN.load_scene_data')
+    @patch('src.fengsha_prep.DustSCAN.detect_dust')
+    @patch('src.fengsha_prep.DustSCAN.cluster_events')
+    def test_dust_scan_pipeline(self, mock_cluster_events, mock_detect_dust, mock_load_scene):
+        """
+        Test the pipeline function to ensure it correctly orchestrates its components.
+        """
+        # Arrange
+        mock_scn_time = datetime.datetime(2023, 1, 1, 12, 0)
+        mock_sat_id = 'goes16'
+        mock_thresholds = {'key': 'value'}
+
+        mock_scene = MagicMock(spec=Scene)
+        mock_dust_mask = MagicMock(spec=xr.DataArray)
+        mock_events = [{'event': 1}]
+
+        mock_load_scene.return_value = mock_scene
+        mock_detect_dust.return_value = mock_dust_mask
+        mock_cluster_events.return_value = mock_events
+
+        # Act
+        result = dust_scan_pipeline(mock_scn_time, mock_sat_id, mock_thresholds)
+
+        # Assert
+        mock_load_scene.assert_called_once_with(mock_scn_time, mock_sat_id)
+        mock_detect_dust.assert_called_once_with(mock_scene, mock_sat_id, mock_thresholds)
+        mock_cluster_events.assert_called_once_with(mock_dust_mask, mock_scn_time, mock_sat_id)
+        self.assertEqual(result, mock_events)
 
 
 if __name__ == '__main__':
