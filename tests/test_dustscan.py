@@ -8,6 +8,7 @@ import xarray as xr
 from src.fengsha_prep.DustSCAN import (
     cluster_events,
     detect_dust,
+    load_scene_data,
     process_scene,
     _process_scene_sync
 )
@@ -93,13 +94,20 @@ class TestAsyncDustScan(unittest.IsolatedAsyncioTestCase):
 
 
 class TestDustScanIntegration(unittest.TestCase):
-    @patch('src.fengsha_prep.DustSCAN.load_scene_data')
-    def test_full_pipeline_with_mock_scene(self, mock_load_scene):
+    @patch('src.fengsha_prep.DustSCAN.Scene')
+    @patch('src.fengsha_prep.DustSCAN.goes_s3')
+    def test_full_pipeline_with_mock_s3(self, mock_goes_s3, mock_scene_cls):
         """
-        Integration test for the synchronous pipeline (_process_scene_sync)
-        using a mock scene.
+        Integration test for the synchronous pipeline with mocked S3 data.
         """
-        mock_scene = MagicMock()
+        mock_s3_path = "s3://mock-bucket/mock-data"
+        mock_goes_s3.get_s3_path.return_value = mock_s3_path
+        mock_goes_s3.SATELLITE_CONFIG = {'goes16': {}}
+        mock_goes_s3.SATELLITE_BANDS = {'goes16': ['C11', 'C13', 'C15']}
+
+        mock_scene_instance = mock_scene_cls.return_value
+        mock_resampled_scene = mock_scene_instance.resample.return_value
+
         # Use a higher resolution grid to ensure points are close enough for DBSCAN
         shape = (600, 600)
         lats = np.linspace(30, 35, shape[0])
@@ -115,12 +123,11 @@ class TestDustScanIntegration(unittest.TestCase):
         # Create a 10x10 pixel patch of dust-like values in the center of the grid
         b12_data[295:305, 295:305] = 280
 
-        mock_scene.__getitem__.side_effect = lambda key: {
+        mock_resampled_scene.__getitem__.side_effect = lambda key: {
             'C11': xr.DataArray(b08_data, coords=coords, dims=dims),
             'C13': xr.DataArray(b10_data, coords=coords, dims=dims),
             'C15': xr.DataArray(b12_data, coords=coords, dims=dims),
         }[key]
-        mock_load_scene.return_value = mock_scene
 
         scn_time = datetime.datetime.now()
         sat_id = 'goes16'
@@ -132,6 +139,11 @@ class TestDustScanIntegration(unittest.TestCase):
 
         events = _process_scene_sync(scn_time, sat_id, thresholds)
 
+        mock_goes_s3.get_s3_path.assert_called_once_with(sat_id, scn_time)
+        mock_scene_cls.assert_called_once_with(reader='abi_l1b', filenames=[mock_s3_path])
+        mock_scene_instance.load.assert_called_once_with(['C11', 'C13', 'C15'])
+        mock_scene_instance.resample.assert_called_once_with(resampler='native')
+
         self.assertIsNotNone(events)
         self.assertEqual(len(events), 1)
         event = events[0]
@@ -139,6 +151,35 @@ class TestDustScanIntegration(unittest.TestCase):
         self.assertAlmostEqual(event['longitude'], -97.5, places=1)
         self.assertEqual(event['area_pixels'], 100)
         self.assertEqual(event['satellite'], 'goes16')
+
+    @patch('src.fengsha_prep.DustSCAN.goes_s3')
+    def test_load_scene_data_file_not_found(self, mock_goes_s3):
+        """
+        Test that load_scene_data returns None when S3 files are not found.
+        """
+        mock_goes_s3.SATELLITE_CONFIG = {'goes16': {}}
+        mock_goes_s3.get_s3_path.side_effect = FileNotFoundError
+        scn = load_scene_data(datetime.datetime.now(), 'goes16')
+        self.assertIsNone(scn)
+
+    @patch('src.fengsha_prep.DustSCAN.glob')
+    @patch('src.fengsha_prep.DustSCAN.Scene')
+    def test_load_scene_data_local_fallback(self, mock_scene_cls, mock_glob):
+        """
+        Test the local file loading fallback for a non-GOES satellite.
+        """
+        mock_glob.glob.return_value = ['data/himawari_file.nc']
+        mock_scene_instance = mock_scene_cls.return_value
+
+        scn_time = datetime.datetime.now()
+        sat_id = 'himawari8'
+
+        scn = load_scene_data(scn_time, sat_id)
+
+        self.assertIsNotNone(scn)
+        mock_glob.glob.assert_called_once()
+        mock_scene_cls.assert_called_once_with(filenames=['data/himawari_file.nc'], reader='ahi_hsd')
+        mock_scene_instance.load.assert_called_once_with(['B11', 'B13', 'B15'])
 
 
 if __name__ == '__main__':
