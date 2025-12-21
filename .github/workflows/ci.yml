@@ -20,13 +20,17 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install .
+        pip install ruff pytest mypy
 
-    - name: Lint and format with ruff
+    - name: Lint with ruff
       run: |
-        pip install ruff
         ruff check .
         ruff format --check .
 
-    - name: Run tests
+    - name: Check types with mypy
       run: |
-        python -m unittest discover tests
+        mypy src/
+
+    - name: Run tests with pytest
+      run: |
+        pytest

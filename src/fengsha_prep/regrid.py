@@ -1,7 +1,6 @@
 """
 This module provides functions for regridding data.
 """
-from typing import Union
 import xarray as xr
 import xesmf as xe
 import numpy as np

@@ -237,7 +237,7 @@ async def run_dust_scan_in_period(
     end_time: datetime.datetime,
     sat_id: str,
     output_csv: str,
-    thresholds: Dict[str, float] = None,
+    thresholds: Optional[Dict[str, float]] = None,
     concurrency_limit: int = 10
 ) -> None:
     """
