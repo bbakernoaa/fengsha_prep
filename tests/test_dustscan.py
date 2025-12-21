@@ -10,7 +10,7 @@ from src.fengsha_prep.DustSCAN import (
     detect_dust,
     load_scene_data,
     process_scene,
-    _process_scene_sync
+    dust_scan_pipeline
 )
 
 
@@ -52,9 +52,39 @@ class TestDustScan(unittest.TestCase):
         events = cluster_events(dust_mask, datetime.datetime.now(), 'goes16')
         self.assertEqual(len(events), 0)
 
+    def test_cluster_events_with_dust(self):
+        """
+        Test the cluster_events function with a mock dust mask containing two plumes.
+        """
+        shape = (500, 500)
+        lats = np.linspace(30, 35, shape[0])
+        lons = np.linspace(-100, -95, shape[1])
+        lon2d, lat2d = np.meshgrid(lons, lats)
+
+        dust_data = np.zeros(shape, dtype=bool)
+        # Plume 1
+        dust_data[100:120, 100:120] = True
+        # Plume 2
+        dust_data[400:420, 400:420] = True
+
+        dust_mask = xr.DataArray(
+            dust_data,
+            coords={'lat': (('y', 'x'), lat2d), 'lon': (('y', 'x'), lon2d)},
+            dims=('y', 'x')
+        )
+        scn_time = datetime.datetime.now()
+        events = cluster_events(dust_mask, scn_time, 'goes16')
+
+        self.assertEqual(len(events), 2)
+        # Check area, ensuring they are roughly the correct size
+        self.assertAlmostEqual(events[0]['area_pixels'], 400, delta=20)
+        self.assertAlmostEqual(events[1]['area_pixels'], 400, delta=20)
+        # Check that the centroids are in different locations
+        self.assertNotAlmostEqual(events[0]['latitude'], events[1]['latitude'])
+
 
 class TestAsyncDustScan(unittest.IsolatedAsyncioTestCase):
-    @patch('src.fengsha_prep.DustSCAN._process_scene_sync')
+    @patch('src.fengsha_prep.DustSCAN.dust_scan_pipeline')
     async def test_process_scene_success(self, mock_sync_processor):
         """
         Test the async process_scene function for a successful run.
@@ -75,7 +105,7 @@ class TestAsyncDustScan(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(events, expected_events)
 
-    @patch('src.fengsha_prep.DustSCAN._process_scene_sync')
+    @patch('src.fengsha_prep.DustSCAN.dust_scan_pipeline')
     async def test_process_scene_exception(self, mock_sync_processor):
         """
         Test the async process_scene function when an exception occurs.
@@ -137,7 +167,7 @@ class TestDustScanIntegration(unittest.TestCase):
             'temp_10': 280
         }
 
-        events = _process_scene_sync(scn_time, sat_id, thresholds)
+        events = dust_scan_pipeline(scn_time, sat_id, thresholds)
 
         mock_goes_s3.get_s3_path.assert_called_once_with(sat_id, scn_time)
         mock_scene_cls.assert_called_once_with(reader='abi_l1b', filenames=[mock_s3_path])
