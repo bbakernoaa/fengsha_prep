@@ -6,10 +6,10 @@ import numpy as np
 import xarray as xr
 
 from src.fengsha_prep.DustSCAN import (
+    _process_scene_sync,
     cluster_events,
     detect_dust,
     load_scene_data,
-    process_scene,
     dust_scan_pipeline
 )
 
@@ -84,76 +84,71 @@ class TestDustScan(unittest.TestCase):
 
 
 class TestAsyncDustScan(unittest.IsolatedAsyncioTestCase):
-    @patch('src.fengsha_prep.DustSCAN.dust_scan_pipeline')
-    async def test_process_scene_success(self, mock_sync_processor):
+    @patch('src.fengsha_prep.DustSCAN._process_scene_sync')
+    @patch('src.fengsha_prep.DustSCAN.load_scene_data')
+    async def test_dust_scan_pipeline_success(self, mock_load_scene, mock_process_sync):
         """
-        Test the async process_scene function for a successful run.
+        Test the async dust_scan_pipeline for a successful run.
         """
         mock_scn_time = datetime.datetime(2023, 1, 1, 12, 0)
         mock_sat_id = 'goes16'
         mock_thresholds = {'key': 'value'}
-        expected_events = [
-            {'lat': 34.5, 'lon': -101.2, 'area': 50},
-            {'lat': 35.1, 'lon': -102.5, 'area': 120}
-        ]
-        mock_sync_processor.return_value = expected_events
+        mock_scene_obj = MagicMock()
+        expected_events = [{'event': 1}]
 
-        events = await process_scene(mock_scn_time, mock_sat_id, mock_thresholds)
+        mock_load_scene.return_value = mock_scene_obj
+        mock_process_sync.return_value = expected_events
 
-        mock_sync_processor.assert_called_once_with(
-            mock_scn_time, mock_sat_id, mock_thresholds
+        events = await dust_scan_pipeline(mock_scn_time, mock_sat_id, mock_thresholds)
+
+        mock_load_scene.assert_called_once_with(mock_scn_time, mock_sat_id)
+        mock_process_sync.assert_called_once_with(
+            mock_scene_obj, mock_scn_time, mock_sat_id, mock_thresholds
         )
         self.assertEqual(events, expected_events)
 
-    @patch('src.fengsha_prep.DustSCAN.dust_scan_pipeline')
-    async def test_process_scene_exception(self, mock_sync_processor):
+    @patch('src.fengsha_prep.DustSCAN.load_scene_data')
+    async def test_dust_scan_pipeline_load_fails(self, mock_load_scene):
         """
-        Test the async process_scene function when an exception occurs.
+        Test the async pipeline when scene loading returns None.
         """
-        mock_scn_time = datetime.datetime(2023, 1, 1, 12, 0)
-        mock_sat_id = 'goes16'
-        mock_thresholds = {'key': 'value'}
-        mock_sync_processor.side_effect = Exception("Something went wrong")
+        mock_load_scene.return_value = None
+        events = await dust_scan_pipeline(datetime.datetime.now(), 'goes16', {})
+        self.assertIsNone(events)
 
-        events = await process_scene(mock_scn_time, mock_sat_id, mock_thresholds)
+    @patch('src.fengsha_prep.DustSCAN._process_scene_sync')
+    @patch('src.fengsha_prep.DustSCAN.load_scene_data')
+    async def test_dust_scan_pipeline_process_fails(self, mock_load_scene, mock_process_sync):
+        """
+        Test the async pipeline when the synchronous processing part fails.
+        """
+        mock_load_scene.return_value = MagicMock()
+        mock_process_sync.side_effect = Exception("Processing failed")
 
-        mock_sync_processor.assert_called_once_with(
-            mock_scn_time, mock_sat_id, mock_thresholds
-        )
+        events = await dust_scan_pipeline(datetime.datetime.now(), 'goes16', {})
         self.assertIsNone(events)
 
 
 class TestDustScanIntegration(unittest.TestCase):
-    @patch('src.fengsha_prep.DustSCAN.Scene')
-    @patch('src.fengsha_prep.DustSCAN.goes_s3')
-    def test_full_pipeline_with_mock_s3(self, mock_goes_s3, mock_scene_cls):
+    def test_process_scene_sync_integration(self):
         """
-        Integration test for the synchronous pipeline with mocked S3 data.
+        Integration test for the synchronous processing part of the pipeline.
         """
-        mock_s3_path = "s3://mock-bucket/mock-data"
-        mock_goes_s3.get_s3_path.return_value = mock_s3_path
-        mock_goes_s3.SATELLITE_CONFIG = {'goes16': {}}
-        mock_goes_s3.SATELLITE_BANDS = {'goes16': ['C11', 'C13', 'C15']}
-
-        mock_scene_instance = mock_scene_cls.return_value
-        mock_resampled_scene = mock_scene_instance.resample.return_value
-
-        # Use a higher resolution grid to ensure points are close enough for DBSCAN
+        # Create a mock Scene object with realistic data
         shape = (600, 600)
         lats = np.linspace(30, 35, shape[0])
         lons = np.linspace(-100, -95, shape[1])
         lon2d, lat2d = np.meshgrid(lons, lats)
-
         coords = {'lat': (('y', 'x'), lat2d), 'lon': (('y', 'x'), lon2d)}
         dims = ['y', 'x']
 
         b08_data = 280 * np.ones(shape)
         b10_data = 290 * np.ones(shape)
         b12_data = 290 * np.ones(shape)
-        # Create a 10x10 pixel patch of dust-like values in the center of the grid
-        b12_data[295:305, 295:305] = 280
+        b12_data[295:305, 295:305] = 280  # Dust patch
 
-        mock_resampled_scene.__getitem__.side_effect = lambda key: {
+        mock_scene = MagicMock()
+        mock_scene.__getitem__.side_effect = lambda key: {
             'C11': xr.DataArray(b08_data, coords=coords, dims=dims),
             'C13': xr.DataArray(b10_data, coords=coords, dims=dims),
             'C15': xr.DataArray(b12_data, coords=coords, dims=dims),
@@ -167,13 +162,10 @@ class TestDustScanIntegration(unittest.TestCase):
             'temp_10': 280
         }
 
-        events = dust_scan_pipeline(scn_time, sat_id, thresholds)
+        # Run the synchronous processing function
+        events = _process_scene_sync(mock_scene, scn_time, sat_id, thresholds)
 
-        mock_goes_s3.get_s3_path.assert_called_once_with(sat_id, scn_time)
-        mock_scene_cls.assert_called_once_with(reader='abi_l1b', filenames=[mock_s3_path])
-        mock_scene_instance.load.assert_called_once_with(['C11', 'C13', 'C15'])
-        mock_scene_instance.resample.assert_called_once_with(resampler='native')
-
+        # Assertions
         self.assertIsNotNone(events)
         self.assertEqual(len(events), 1)
         event = events[0]
