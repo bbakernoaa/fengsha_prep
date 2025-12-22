@@ -206,26 +206,29 @@ def cluster_events(dust_mask: xr.DataArray, scn_time: datetime.datetime, sat_id:
     return events
 
 
-def dust_scan_pipeline(
+def _process_scene_sync(
+    scn: Scene, scn_time: datetime.datetime, sat_id: str, thresholds: Dict[str, float]
+) -> List[Dict[str, Any]]:
+    """Synchronous (CPU-bound) part of the processing pipeline."""
+    dust_mask = detect_dust(scn, sat_id, thresholds)
+    return cluster_events(dust_mask, scn_time, sat_id)
+
+
+async def dust_scan_pipeline(
     scn_time: datetime.datetime, sat_id: str, thresholds: Dict[str, float]
 ) -> Optional[List[Dict[str, Any]]]:
-    """Synchronous pipeline for scene processing."""
-    scn = load_scene_data(scn_time, sat_id)
-    if scn is None:
-        return None
-
-    dust_mask = detect_dust(scn, sat_id, thresholds)
-    events = cluster_events(dust_mask, scn_time, sat_id)
-    return events
-
-
-async def process_scene(scn_time: datetime.datetime, sat_id: str, thresholds: Dict[str, float]) -> Optional[List[Dict[str, Any]]]:
     """
     Orchestrates the processing of a single satellite scene asynchronously.
     """
     try:
+        # I/O-bound operation: run in the main async thread
+        scn = await asyncio.to_thread(load_scene_data, scn_time, sat_id)
+        if scn is None:
+            return None
+
+        # CPU-bound operations: run in a separate thread to avoid blocking
         return await asyncio.to_thread(
-            dust_scan_pipeline, scn_time, sat_id, thresholds
+            _process_scene_sync, scn, scn_time, sat_id, thresholds
         )
     except Exception as e:
         logging.error(f"Error processing {scn_time}: {e}")
@@ -265,7 +268,7 @@ async def run_dust_scan_in_period(
         """Acquires semaphore and runs the scene processing."""
         async with semaphore:
             logging.info(f"Processing {scn_time}...")
-            events = await process_scene(scn_time, sat_id, thresholds)
+            events = await dust_scan_pipeline(scn_time, sat_id, thresholds)
             if events:
                 all_events.extend(events)
                 logging.info(f"  Found {len(events)} dust plumes at {scn_time}.")
