@@ -157,14 +157,16 @@ def cluster_events(dust_mask: xr.DataArray, scn_time: datetime.datetime, sat_id:
         A list of dictionaries, where each dictionary represents a detected
         dust event with its properties (centroid, area, etc.).
     """
-    valid_pixels = dust_mask.where(dust_mask, drop=True)
+    # Stack the spatial dimensions and drop non-dusty pixels to get a clean
+    # list of coordinates. This is robust to non-contiguous dust plumes.
+    stacked_mask = dust_mask.stack(points=('y', 'x'))
+    valid_pixels = stacked_mask.where(stacked_mask, drop=True)
+
     if valid_pixels.size == 0:
         return []
 
-    # Explicitly flatten the coordinates to ensure they are 1D arrays,
-    # which is required for np.column_stack to produce a (N, 2) array.
-    lats = valid_pixels.lat.values.ravel()
-    lons = valid_pixels.lon.values.ravel()
+    lats = valid_pixels.lat.values
+    lons = valid_pixels.lon.values
     coords_deg = np.column_stack((lats, lons))
 
     # For accurate geographic clustering, we use the haversine metric, which
@@ -172,10 +174,10 @@ def cluster_events(dust_mask: xr.DataArray, scn_time: datetime.datetime, sat_id:
     coords_rad = np.radians(coords_deg)
 
     # DBSCAN eps is the search radius. For haversine, it's in radians.
-    # We want a radius of ~5km. Earth's radius is ~6371 km.
-    # eps = 5 km / 6371 km
+    # We want a radius of ~20km to ensure plume continuity. Earth's radius is ~6371 km.
+    # eps = 20 km / 6371 km
     earth_radius_km = 6371
-    eps_km = 5
+    eps_km = 20
     eps_rad = eps_km / earth_radius_km
 
     db = DBSCAN(eps=eps_rad, min_samples=10, metric='haversine').fit(coords_rad)
@@ -204,10 +206,10 @@ def cluster_events(dust_mask: xr.DataArray, scn_time: datetime.datetime, sat_id:
     return events
 
 
-def _process_scene_sync(
+def dust_scan_pipeline(
     scn_time: datetime.datetime, sat_id: str, thresholds: Dict[str, float]
 ) -> Optional[List[Dict[str, Any]]]:
-    """Synchronous helper function for scene processing."""
+    """Synchronous pipeline for scene processing."""
     scn = load_scene_data(scn_time, sat_id)
     if scn is None:
         return None
@@ -223,7 +225,7 @@ async def process_scene(scn_time: datetime.datetime, sat_id: str, thresholds: Di
     """
     try:
         return await asyncio.to_thread(
-            _process_scene_sync, scn_time, sat_id, thresholds
+            dust_scan_pipeline, scn_time, sat_id, thresholds
         )
     except Exception as e:
         logging.error(f"Error processing {scn_time}: {e}")
