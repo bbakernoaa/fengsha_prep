@@ -219,19 +219,30 @@ async def dust_scan_pipeline(
 ) -> Optional[List[Dict[str, Any]]]:
     """
     Orchestrates the processing of a single satellite scene asynchronously.
+
+    This function separates the I/O-bound data loading from the CPU-bound
+    data processing, running each in a separate thread to avoid blocking the
+    asyncio event loop.
     """
     try:
-        # I/O-bound operation: run in the main async thread
+        # I/O-bound: Load satellite data. This is a blocking operation,
+        # so we run it in a thread pool to avoid stalling the event loop.
         scn = await asyncio.to_thread(load_scene_data, scn_time, sat_id)
         if scn is None:
+            # This can happen if no files are found for the given time.
             return None
+    except Exception as e:
+        logging.error(f"Error loading data for {scn_time}: {e}")
+        return None
 
-        # CPU-bound operations: run in a separate thread to avoid blocking
+    try:
+        # CPU-bound: Process the loaded data. This is also blocking, so it
+        # runs in the thread pool as well.
         return await asyncio.to_thread(
             _process_scene_sync, scn, scn_time, sat_id, thresholds
         )
     except Exception as e:
-        logging.error(f"Error processing {scn_time}: {e}")
+        logging.error(f"Error processing scene for {scn_time}: {e}")
         return None
 
 
