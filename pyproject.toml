@@ -20,6 +20,7 @@ dependencies = [
     "scikit-learn",
     "aiohttp",
     "s3fs",
+    "earthaccess",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",

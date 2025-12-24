@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import xarray as xr
 
-from src.fengsha_prep.DustSCAN import (
+from fengsha_prep.DustSCAN import (
     _process_scene_sync,
     cluster_events,
     detect_dust,
@@ -84,8 +84,8 @@ class TestDustScan(unittest.TestCase):
 
 
 class TestAsyncDustScan(unittest.IsolatedAsyncioTestCase):
-    @patch('src.fengsha_prep.DustSCAN._process_scene_sync')
-    @patch('src.fengsha_prep.DustSCAN.load_scene_data')
+    @patch('fengsha_prep.DustSCAN._process_scene_sync')
+    @patch('fengsha_prep.DustSCAN.load_scene_data')
     async def test_dust_scan_pipeline_success(self, mock_load_scene, mock_process_sync):
         """
         Test the async dust_scan_pipeline for a successful run.
@@ -107,7 +107,7 @@ class TestAsyncDustScan(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(events, expected_events)
 
-    @patch('src.fengsha_prep.DustSCAN.load_scene_data')
+    @patch('fengsha_prep.DustSCAN.load_scene_data')
     async def test_dust_scan_pipeline_load_fails(self, mock_load_scene):
         """
         Test the async pipeline when scene loading returns None.
@@ -116,8 +116,8 @@ class TestAsyncDustScan(unittest.IsolatedAsyncioTestCase):
         events = await dust_scan_pipeline(datetime.datetime.now(), 'goes16', {})
         self.assertIsNone(events)
 
-    @patch('src.fengsha_prep.DustSCAN._process_scene_sync')
-    @patch('src.fengsha_prep.DustSCAN.load_scene_data')
+    @patch('fengsha_prep.DustSCAN._process_scene_sync')
+    @patch('fengsha_prep.DustSCAN.load_scene_data')
     async def test_dust_scan_pipeline_process_fails(self, mock_load_scene, mock_process_sync):
         """
         Test the async pipeline when the synchronous processing part fails.
@@ -174,7 +174,7 @@ class TestDustScanIntegration(unittest.TestCase):
         self.assertEqual(event['area_pixels'], 100)
         self.assertEqual(event['satellite'], 'goes16')
 
-    @patch('src.fengsha_prep.DustSCAN.goes_s3')
+    @patch('fengsha_prep.DustSCAN.goes_s3')
     def test_load_scene_data_file_not_found(self, mock_goes_s3):
         """
         Test that load_scene_data returns None when S3 files are not found.
@@ -184,8 +184,8 @@ class TestDustScanIntegration(unittest.TestCase):
         scn = load_scene_data(datetime.datetime.now(), 'goes16')
         self.assertIsNone(scn)
 
-    @patch('src.fengsha_prep.DustSCAN.glob')
-    @patch('src.fengsha_prep.DustSCAN.Scene')
+    @patch('fengsha_prep.DustSCAN.glob')
+    @patch('fengsha_prep.DustSCAN.Scene')
     def test_load_scene_data_local_fallback(self, mock_scene_cls, mock_glob):
         """
         Test the local file loading fallback for a non-GOES satellite.

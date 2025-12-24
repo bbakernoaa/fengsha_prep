@@ -4,7 +4,7 @@ Tests for the soilgrids module.
 
 import unittest
 from unittest.mock import patch
-from src.fengsha_prep import soilgrids
+from fengsha_prep import soilgrids
 import xarray as xr
 import numpy as np
 
@@ -14,7 +14,7 @@ class TestSoilgrids(unittest.TestCase):
     """
 
     @patch('xarray.DataArray.to_netcdf')
-    @patch('src.fengsha_prep.soilgrids.SoilGrids')
+    @patch('fengsha_prep.soilgrids.SoilGrids')
     def test_get_soilgrids_data(self, mock_soilgrids, mock_to_netcdf):
         """
         Tests the get_soilgrids_data function.
