@@ -13,7 +13,7 @@ from sklearn.cluster import DBSCAN
 from . import goes_s3
 
 # Default thresholds for dust detection, can be overridden.
-DEFAULT_THRESHOLDS = {
+DEFAULT_THRESHOLDS: Dict[str, float] = {
     'diff_12_10': -0.5,
     'diff_10_8': 2.0,
     'temp_10': 280
@@ -23,17 +23,22 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 
 def get_file_pattern(sat_id: str) -> str:
-    """
-    Gets the satpy reader name for a given satellite.
+    """Gets the satpy reader name for a given satellite.
 
-    Args:
-        sat_id: The identifier of the satellite (e.g., 'goes16').
+    Parameters
+    ----------
+    sat_id : str
+        The identifier of the satellite (e.g., 'goes16', 'himawari8').
 
-    Returns:
+    Returns
+    -------
+    str
         The corresponding satpy reader name.
 
-    Raises:
-        ValueError: If the satellite is not supported.
+    Raises
+    ------
+    ValueError
+        If the satellite is not supported.
     """
     if 'goes' in sat_id:
         return 'abi_l1b'
@@ -46,18 +51,23 @@ def get_file_pattern(sat_id: str) -> str:
 
 
 def load_scene_data(scn_time: datetime.datetime, sat_id: str) -> Optional[Scene]:
-    """
-    Loads and preprocesses satellite data for a single timestamp.
+    """Loads and preprocesses satellite data for a single timestamp.
 
     This function finds the relevant satellite data file(s) for a given time,
     loads them into a Satpy Scene object, loads the required bands, and
-    resamples the scene to a common grid.
+    resamples the scene to a common grid. It supports loading GOES data from
+    AWS S3 or other satellites from a local filesystem.
 
-    Args:
-        scn_time: The timestamp for which to load data.
-        sat_id: The identifier of the satellite.
+    Parameters
+    ----------
+    scn_time : datetime.datetime
+        The timestamp for which to load data.
+    sat_id : str
+        The identifier of the satellite.
 
-    Returns:
+    Returns
+    -------
+    Optional[Scene]
         A preprocessed Satpy Scene object, or None if no files are found.
     """
     if sat_id in goes_s3.SATELLITE_CONFIG:
@@ -92,7 +102,7 @@ def load_scene_data(scn_time: datetime.datetime, sat_id: str) -> Optional[Scene]
     scn = Scene(filenames=files, reader=reader)
 
     if 'himawari' in sat_id:
-        bands = ['B11', 'B13', 'B15']
+        bands: List[str] = ['B11', 'B13', 'B15']
     elif 'seviri' in sat_id:
         bands = ['IR_87', 'IR_108', 'IR_120']
     else:
@@ -103,19 +113,27 @@ def load_scene_data(scn_time: datetime.datetime, sat_id: str) -> Optional[Scene]
 
 
 def detect_dust(scn: Scene, sat_id: str, thresholds: Dict[str, float]) -> xr.DataArray:
-    """
-    Applies a physical algorithm to detect dust in a scene.
+    """Applies a physical algorithm to detect dust in a scene.
 
     This algorithm is based on the brightness temperature differences between
-    infrared channels, a common technique for identifying dust aerosols.
+    infrared channels, a common technique for identifying dust aerosols. The
+    resulting DataArray includes a 'history' attribute detailing the
+    detection parameters.
 
-    Args:
-        scn: The Satpy Scene object containing the satellite data.
-        sat_id: The identifier of the satellite.
-        thresholds: A dictionary of thresholds used for dust detection.
+    Parameters
+    ----------
+    scn : Scene
+        The Satpy Scene object containing the satellite data.
+    sat_id : str
+        The identifier of the satellite.
+    thresholds : Dict[str, float]
+        A dictionary of thresholds used for dust detection.
 
-    Returns:
-        An xarray DataArray representing the binary dust mask (1=Dust, 0=No Dust).
+    Returns
+    -------
+    xr.DataArray
+        A binary dust mask (1=Dust, 0=No Dust) with coordinate information
+        and a 'history' attribute documenting the processing.
     """
     if sat_id in goes_s3.SATELLITE_CONFIG:
         bands = goes_s3.SATELLITE_BANDS.get(sat_id)
@@ -137,23 +155,36 @@ def detect_dust(scn: Scene, sat_id: str, thresholds: Dict[str, float]) -> xr.Dat
             (diff_10_8 > thresholds['diff_10_8']) &
             (b10 > thresholds['temp_10'])
     )
+
+    # --- Add Provenance ---
+    history_log = (
+        f"Dust mask generated at {datetime.datetime.utcnow().isoformat()}Z. "
+        f"Satellite: {sat_id}. Thresholds: {thresholds}."
+    )
+    dust_mask.attrs['history'] = history_log
+
     return dust_mask
 
 
 def cluster_events(dust_mask: xr.DataArray, scn_time: datetime.datetime, sat_id: str) -> List[Dict[str, Any]]:
-    """
-    Identifies distinct dust plumes from a dust mask using DBSCAN.
+    """Identifies distinct dust plumes from a dust mask using DBSCAN.
 
     This function takes a binary dust mask, extracts the coordinates of the
     dusty pixels, and uses the DBSCAN clustering algorithm to group them into
-    distinct events or plumes.
+    distinct events or plumes based on geographic proximity.
 
-    Args:
-        dust_mask: The binary dust mask DataArray.
-        scn_time: The timestamp of the scene.
-        sat_id: The identifier of the satellite.
+    Parameters
+    ----------
+    dust_mask : xr.DataArray
+        The binary dust mask DataArray.
+    scn_time : datetime.datetime
+        The timestamp of the scene.
+    sat_id : str
+        The identifier of the satellite.
 
-    Returns:
+    Returns
+    -------
+    List[Dict[str, Any]]
         A list of dictionaries, where each dictionary represents a detected
         dust event with its properties (centroid, area, etc.).
     """
@@ -176,25 +207,25 @@ def cluster_events(dust_mask: xr.DataArray, scn_time: datetime.datetime, sat_id:
     # DBSCAN eps is the search radius. For haversine, it's in radians.
     # We want a radius of ~20km to ensure plume continuity. Earth's radius is ~6371 km.
     # eps = 20 km / 6371 km
-    earth_radius_km = 6371
-    eps_km = 20
-    eps_rad = eps_km / earth_radius_km
+    earth_radius_km: float = 6371.0
+    eps_km: float = 20.0
+    eps_rad: float = eps_km / earth_radius_km
 
     db = DBSCAN(eps=eps_rad, min_samples=10, metric='haversine').fit(coords_rad)
-    labels = db.labels_
-    unique_labels = set(labels)
+    labels: np.ndarray = db.labels_
+    unique_labels: set = set(labels)
 
-    events = []
+    events: List[Dict[str, Any]] = []
     for k in unique_labels:
         if k == -1:
             continue
 
-        class_member_mask = (labels == k)
-        cluster_coords_deg = coords_deg[class_member_mask]
+        class_member_mask: np.ndarray = (labels == k)
+        cluster_coords_deg: np.ndarray = coords_deg[class_member_mask]
 
-        lat_mean = np.mean(cluster_coords_deg[:, 0])
-        lon_mean = np.mean(cluster_coords_deg[:, 1])
-        area_px = len(cluster_coords_deg)
+        lat_mean: float = np.mean(cluster_coords_deg[:, 0])
+        lon_mean: float = np.mean(cluster_coords_deg[:, 1])
+        area_px: int = len(cluster_coords_deg)
 
         events.append({
             'datetime': scn_time,
@@ -209,7 +240,24 @@ def cluster_events(dust_mask: xr.DataArray, scn_time: datetime.datetime, sat_id:
 def _process_scene_sync(
     scn: Scene, scn_time: datetime.datetime, sat_id: str, thresholds: Dict[str, float]
 ) -> List[Dict[str, Any]]:
-    """Synchronous (CPU-bound) part of the processing pipeline."""
+    """Synchronous (CPU-bound) part of the processing pipeline.
+
+    Parameters
+    ----------
+    scn : Scene
+        The loaded Satpy scene.
+    scn_time : datetime.datetime
+        The timestamp of the scene.
+    sat_id : str
+        The identifier of the satellite.
+    thresholds : Dict[str, float]
+        The thresholds for dust detection.
+
+    Returns
+    -------
+    List[Dict[str, Any]]
+        A list of detected dust events.
+    """
     dust_mask = detect_dust(scn, sat_id, thresholds)
     return cluster_events(dust_mask, scn_time, sat_id)
 
@@ -217,12 +265,26 @@ def _process_scene_sync(
 async def dust_scan_pipeline(
     scn_time: datetime.datetime, sat_id: str, thresholds: Dict[str, float]
 ) -> Optional[List[Dict[str, Any]]]:
-    """
-    Orchestrates the processing of a single satellite scene asynchronously.
+    """Orchestrates the processing of a single satellite scene asynchronously.
 
     This function separates the I/O-bound data loading from the CPU-bound
     data processing, running each in a separate thread to avoid blocking the
     asyncio event loop.
+
+    Parameters
+    ----------
+    scn_time : datetime.datetime
+        The timestamp of the scene to process.
+    sat_id : str
+        The identifier of the satellite.
+    thresholds : Dict[str, float]
+        The thresholds for dust detection.
+
+    Returns
+    -------
+    Optional[List[Dict[str, Any]]]
+        A list of detected dust events, or None if an error occurs or no
+        data is found.
     """
     try:
         # I/O-bound: Load satellite data. This is a blocking operation,
@@ -251,41 +313,48 @@ async def run_dust_scan_in_period(
     end_time: datetime.datetime,
     sat_id: str,
     output_csv: str,
-    thresholds: Dict[str, float] = None,
+    thresholds: Optional[Dict[str, float]] = None,
     concurrency_limit: int = 10
 ) -> None:
-    """
-    Main execution loop for concurrent dust detection over a time period.
+    """Main execution loop for concurrent dust detection over a time period.
 
-    Args:
-        start_time: The start of the time range to analyze.
-        end_time: The end of the time range to analyze.
-        sat_id: The identifier of the satellite (e.g., 'goes16').
-        output_csv: Path to save the resulting CSV file.
-        thresholds: Dictionary of thresholds for dust detection. Uses DEFAULT_THRESHOLDS if None.
-        concurrency_limit: The maximum number of concurrent scene processing tasks.
+    Parameters
+    ----------
+    start_time : datetime.datetime
+        The start of the time range to analyze.
+    end_time : datetime.datetime
+        The end of the time range to analyze.
+    sat_id : str
+        The identifier of the satellite (e.g., 'goes16').
+    output_csv : str
+        Path to save the resulting CSV file.
+    thresholds : Optional[Dict[str, float]], optional
+        Dictionary of thresholds for dust detection. Uses DEFAULT_THRESHOLDS
+        if None, by default None.
+    concurrency_limit : int, optional
+        The maximum number of concurrent scene processing tasks, by default 10.
     """
     if thresholds is None:
         thresholds = DEFAULT_THRESHOLDS
 
     semaphore = asyncio.Semaphore(concurrency_limit)
     all_events: List[Dict[str, Any]] = []
-    tasks = []
+    tasks: List[asyncio.Task] = []
     current_time = start_time
 
     logging.info(f"Starting analysis for {sat_id} from {start_time} to {end_time}...")
 
-    async def worker(scn_time: datetime.datetime):
+    async def worker(scn_time: datetime.datetime, thresholds_dict: Dict[str, float]):
         """Acquires semaphore and runs the scene processing."""
         async with semaphore:
             logging.info(f"Processing {scn_time}...")
-            events = await dust_scan_pipeline(scn_time, sat_id, thresholds)
+            events = await dust_scan_pipeline(scn_time, sat_id, thresholds_dict)
             if events:
                 all_events.extend(events)
                 logging.info(f"  Found {len(events)} dust plumes at {scn_time}.")
 
     while current_time <= end_time:
-        task = asyncio.create_task(worker(current_time))
+        task = asyncio.create_task(worker(current_time, thresholds))
         tasks.append(task)
         current_time += datetime.timedelta(minutes=15)
 
