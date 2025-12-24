@@ -5,10 +5,15 @@ import numpy as np
 import xarray as xr
 import pytest
 from satpy import Scene
+from unittest.mock import patch
+
 from fengsha_prep.DustSCAN import (
+    _process_scene_sync,
     detect_dust,
     cluster_events,
     DEFAULT_THRESHOLDS,
+    dust_scan_pipeline,
+    load_scene_data,
 )
 
 
@@ -129,3 +134,180 @@ def test_cluster_events_no_dust():
 
     # --- Verification ---
     assert len(events) == 0
+
+
+def test_cluster_events_with_multiple_plumes():
+    """
+    Tests that cluster_events can distinguish between two separate dust plumes.
+    """
+    shape = (500, 500)
+    lats = np.linspace(30, 35, shape[0])
+    lons = np.linspace(-100, -95, shape[1])
+    lon2d, lat2d = np.meshgrid(lons, lats)
+
+    dust_data = np.zeros(shape, dtype=bool)
+    # Plume 1
+    dust_data[100:120, 100:120] = True
+    # Plume 2
+    dust_data[400:420, 400:420] = True
+
+    dust_mask = xr.DataArray(
+        dust_data,
+        coords={'lat': (('y', 'x'), lat2d), 'lon': (('y', 'x'), lon2d)},
+        dims=('y', 'x')
+    )
+    scn_time = datetime.datetime.now()
+    events = cluster_events(dust_mask, scn_time, 'goes16')
+
+    assert len(events) == 2
+    # Check that the areas are approximately correct
+    assert abs(events[0]['area_pixels'] - 400) < 20
+    assert abs(events[1]['area_pixels'] - 400) < 20
+    # Check that the centroids are in different locations
+    assert abs(events[0]['latitude'] - events[1]['latitude']) > 1.0
+
+
+@pytest.mark.asyncio
+@patch('fengsha_prep.DustSCAN._process_scene_sync')
+@patch('fengsha_prep.DustSCAN.load_scene_data')
+async def test_dust_scan_pipeline_success(mock_load_scene, mock_process_sync):
+    """
+    Tests the async dust_scan_pipeline for a successful run.
+    """
+    mock_scn_time = datetime.datetime(2023, 1, 1, 12, 0)
+    mock_sat_id = 'goes16'
+    mock_thresholds = {'key': 'value'}
+    mock_scene_obj = MagicMock()
+    expected_events = [{'event': 1}]
+
+    mock_load_scene.return_value = mock_scene_obj
+    mock_process_sync.return_value = expected_events
+
+    events = await dust_scan_pipeline(mock_scn_time, mock_sat_id, mock_thresholds)
+
+    mock_load_scene.assert_called_once_with(mock_scn_time, mock_sat_id)
+    mock_process_sync.assert_called_once_with(
+        mock_scene_obj, mock_scn_time, mock_sat_id, mock_thresholds
+    )
+    assert events == expected_events
+
+
+@pytest.mark.asyncio
+@patch('fengsha_prep.DustSCAN.load_scene_data')
+async def test_dust_scan_pipeline_load_fails(mock_load_scene):
+    """
+    Tests the async pipeline when scene loading returns None.
+    """
+    mock_load_scene.return_value = None
+    events = await dust_scan_pipeline(datetime.datetime.now(), 'goes16', {})
+    assert events is None
+
+
+@pytest.mark.asyncio
+@patch('fengsha_prep.DustSCAN._process_scene_sync')
+@patch('fengsha_prep.DustSCAN.load_scene_data')
+async def test_dust_scan_pipeline_process_fails(mock_load_scene, mock_process_sync):
+    """
+    Tests the async pipeline when the synchronous processing part fails.
+    """
+    mock_load_scene.return_value = MagicMock()
+    mock_process_sync.side_effect = Exception("Processing failed")
+
+    events = await dust_scan_pipeline(datetime.datetime.now(), 'goes16', {})
+    assert events is None
+
+
+def test_process_scene_sync_integration():
+    """
+    Integration test for the synchronous processing part of the pipeline.
+    """
+    shape = (600, 600)
+    lats = np.linspace(30, 35, shape[0])
+    lons = np.linspace(-100, -95, shape[1])
+    lon2d, lat2d = np.meshgrid(lons, lats)
+    coords = {'lat': (('y', 'x'), lat2d), 'lon': (('y', 'x'), lon2d)}
+    dims = ['y', 'x']
+
+    b08_data = 280 * np.ones(shape)
+    b10_data = 290 * np.ones(shape)
+    b12_data = 290 * np.ones(shape)
+    b12_data[295:305, 295:305] = 280  # Dust patch
+
+    mock_scene = MagicMock(spec=Scene)
+    mock_scene.__getitem__.side_effect = lambda key: {
+        'C11': xr.DataArray(b08_data, coords=coords, dims=dims),
+        'C13': xr.DataArray(b10_data, coords=coords, dims=dims),
+        'C15': xr.DataArray(b12_data, coords=coords, dims=dims),
+    }[key]
+    mock_scene.keys.return_value = ['C11', 'C13', 'C15']
+
+
+    scn_time = datetime.datetime.now()
+    sat_id = 'goes16'
+
+    events = _process_scene_sync(mock_scene, scn_time, sat_id, DEFAULT_THRESHOLDS)
+
+    assert events is not None
+    assert len(events) == 1
+    event = events[0]
+    assert abs(event['latitude'] - 32.5) < 0.1
+    assert abs(event['longitude'] - -97.5) < 0.1
+    assert event['area_pixels'] == 100
+    assert event['satellite'] == 'goes16'
+
+
+@patch('fengsha_prep.DustSCAN.goes_s3')
+def test_load_scene_data_file_not_found(mock_goes_s3):
+    """
+    Tests that load_scene_data returns None when S3 files are not found.
+    """
+    mock_goes_s3.SATELLITE_CONFIG = {'goes16': {}}
+    mock_goes_s3.get_s3_path.side_effect = FileNotFoundError
+    scn = load_scene_data(datetime.datetime.now(), 'goes16')
+    assert scn is None
+
+
+@patch('fengsha_prep.DustSCAN.glob')
+@patch('fengsha_prep.DustSCAN.Scene')
+def test_load_scene_data_local_fallback(mock_scene_cls, mock_glob):
+    """
+    Tests the local file loading fallback for a non-GOES satellite.
+    """
+    mock_glob.glob.return_value = ['data/himawari_file.nc']
+    mock_scene_instance = mock_scene_cls.return_value
+    mock_scene_instance.resample.return_value = mock_scene_instance
+
+
+    scn_time = datetime.datetime.now()
+    sat_id = 'himawari8'
+
+    scn = load_scene_data(scn_time, sat_id)
+
+    assert scn is not None
+    mock_glob.glob.assert_called_once()
+    mock_scene_cls.assert_called_once_with(filenames=['data/himawari_file.nc'], reader='ahi_hsd')
+    mock_scene_instance.load.assert_called_once_with(['B11', 'B13', 'B15'])
+
+
+@pytest.mark.asyncio
+@patch('fengsha_prep.DustSCAN.logging')
+@patch('fengsha_prep.DustSCAN._process_scene_sync')
+@patch('fengsha_prep.DustSCAN.load_scene_data')
+async def test_dust_scan_pipeline_handles_processing_value_error(
+    mock_load_scene, mock_process_sync, mock_logging
+):
+    """
+    Tests that the pipeline correctly handles a ValueError during the
+    CPU-bound processing stage and logs the appropriate error.
+    """
+    mock_load_scene.return_value = MagicMock(spec=Scene)
+    mock_process_sync.side_effect = ValueError("Invalid data dimensions")
+
+    scn_time = datetime.datetime(2023, 1, 1, 12, 0)
+    result = await dust_scan_pipeline(scn_time, 'goes16', {})
+
+    assert result is None
+    mock_logging.error.assert_called_once()
+    log_message = mock_logging.error.call_args[0][0]
+    assert "Data processing error" in log_message
+    assert "Invalid data dimensions" in log_message

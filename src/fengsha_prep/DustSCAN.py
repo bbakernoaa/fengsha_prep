@@ -286,15 +286,23 @@ async def dust_scan_pipeline(
         A list of detected dust events, or None if an error occurs or no
         data is found.
     """
+    scn = None  # Initialize scn to None
     try:
-        # I/O-bound: Load satellite data. This is a blocking operation,
-        # so we run it in a thread pool to avoid stalling the event loop.
+        # I/O-bound: Load satellite data. This is a blocking operation, so we
+        # run it in a thread pool to avoid stalling the event loop.
         scn = await asyncio.to_thread(load_scene_data, scn_time, sat_id)
         if scn is None:
-            # This can happen if no files are found for the given time.
+            # This is an expected outcome if no files are found for the given time.
+            logging.info(f"No data available for {scn_time}, skipping.")
             return None
-    except Exception as e:
-        logging.error(f"Error loading data for {scn_time}: {e}")
+    except FileNotFoundError:
+        logging.warning(f"Data file not found for {scn_time}, skipping.")
+        return None
+    except (IOError, OSError) as e:
+        logging.error(f"I/O error loading data for {scn_time}: {e}")
+        return None
+    except Exception:
+        logging.exception(f"An unexpected error occurred during data loading for {scn_time}.")
         return None
 
     try:
@@ -303,8 +311,11 @@ async def dust_scan_pipeline(
         return await asyncio.to_thread(
             _process_scene_sync, scn, scn_time, sat_id, thresholds
         )
-    except Exception as e:
-        logging.error(f"Error processing scene for {scn_time}: {e}")
+    except (ValueError, KeyError, AttributeError) as e:
+        logging.error(f"Data processing error for scene {scn_time}: {e}")
+        return None
+    except Exception:
+        logging.exception(f"An unexpected error occurred during scene processing for {scn_time}.")
         return None
 
 
