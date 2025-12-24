@@ -8,16 +8,16 @@ import unittest
 sys.modules['xesmf'] = MagicMock()
 sys.modules['esmpy'] = MagicMock()
 
-import xarray as xr
-import numpy as np
-from src.fengsha_prep import regrid
+import xarray as xr  # noqa: E402
+import numpy as np  # noqa: E402
+from fengsha_prep import regrid  # noqa: E402
 
 class TestRegrid(unittest.TestCase):
     """
     Tests for the regrid module.
     """
 
-    @patch('src.fengsha_prep.regrid.xe')
+    @patch('fengsha_prep.regrid.xe')
     def test_regrid_modis_to_rectilinear(self, mock_xe):
         """
         Tests the regrid_modis_to_rectilinear function.

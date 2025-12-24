@@ -2,7 +2,7 @@ import datetime
 import unittest
 from unittest.mock import patch
 
-from src.fengsha_prep.goes_s3 import get_s3_path, _parse_s3_timestamp
+from fengsha_prep.goes_s3 import get_s3_path, _parse_s3_timestamp
 
 
 class TestGoesS3(unittest.TestCase):
@@ -12,7 +12,7 @@ class TestGoesS3(unittest.TestCase):
         expected_time = datetime.datetime(2023, 4, 10, 15, 1, 17)
         self.assertEqual(_parse_s3_timestamp(filename), expected_time)
 
-    @patch('src.fengsha_prep.goes_s3.fs')
+    @patch('fengsha_prep.goes_s3.fs')
     def test_get_s3_path_success(self, mock_s3fs):
         """Test that the correct S3 file path is selected."""
         mock_files = [
@@ -28,7 +28,7 @@ class TestGoesS3(unittest.TestCase):
 
         self.assertEqual(get_s3_path(sat_id, scn_time), expected_path)
 
-    @patch('src.fengsha_prep.goes_s3.fs')
+    @patch('fengsha_prep.goes_s3.fs')
     def test_get_s3_path_edge_of_hour(self, mock_s3fs):
         """Test S3 path selection when the closest file is in the next hour."""
         files_hour15 = [
@@ -45,7 +45,7 @@ class TestGoesS3(unittest.TestCase):
 
         self.assertEqual(get_s3_path("goes16", scn_time), expected_path)
 
-    @patch('src.fengsha_prep.goes_s3.fs')
+    @patch('fengsha_prep.goes_s3.fs')
     def test_get_s3_path_no_files_found(self, mock_s3fs):
         """Test that FileNotFoundError is raised when no files are in any searched S3 dir."""
         mock_s3fs.ls.side_effect = FileNotFoundError
