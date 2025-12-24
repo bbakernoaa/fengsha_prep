@@ -43,8 +43,8 @@ class TestDustScan(unittest.TestCase):
 
         self.assertIsInstance(dust_mask, xr.DataArray)
         self.assertEqual(dust_mask.shape, (10, 10))
-        self.assertTrue(np.all(dust_mask.values[5:, 5:] == True))
-        self.assertTrue(np.all(dust_mask.values[:5, :5] == False))
+        self.assertTrue(np.all(dust_mask.values[5:, 5:]))
+        self.assertFalse(np.any(dust_mask.values[:5, :5]))
 
     def test_cluster_events_no_dust(self):
         """Test cluster_events with a mask that contains no dust."""

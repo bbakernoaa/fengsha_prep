@@ -8,9 +8,9 @@ import unittest
 sys.modules['xesmf'] = MagicMock()
 sys.modules['esmpy'] = MagicMock()
 
-import xarray as xr
-import numpy as np
-from src.fengsha_prep import regrid
+import xarray as xr  # noqa: E402
+import numpy as np  # noqa: E402
+from src.fengsha_prep import regrid  # noqa: E402
 
 class TestRegrid(unittest.TestCase):
     """

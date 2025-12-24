@@ -3,7 +3,7 @@ Tests for the soilgrids module.
 """
 
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from src.fengsha_prep import soilgrids
 import xarray as xr
 import numpy as np
