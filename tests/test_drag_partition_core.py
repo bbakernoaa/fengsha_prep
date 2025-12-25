@@ -2,7 +2,7 @@ from unittest.mock import patch
 import numpy as np
 import xarray as xr
 import pytest
-from fengsha_prep.drag_partition import process_hybrid_drag
+from fengsha_prep.pipelines.drag_partition.core import process_hybrid_drag
 
 @pytest.fixture
 def mock_modis_data() -> tuple[xr.Dataset, xr.Dataset]:
@@ -30,8 +30,8 @@ def mock_modis_data() -> tuple[xr.Dataset, xr.Dataset]:
 
     return ds_alb, ds_lai
 
-@patch('fengsha_prep.drag_partition.get_modis_data')
-@patch('fengsha_prep.drag_partition.earthaccess.login')
+@patch('fengsha_prep.pipelines.drag_partition.core.get_modis_data')
+@patch('fengsha_prep.pipelines.drag_partition.core.earthaccess.login')
 def test_process_hybrid_drag_calculation(mock_login, mock_get_data, mock_modis_data):
     """
     Tests the end-to-end calculation of the process_hybrid_drag function,

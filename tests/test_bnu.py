@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fengsha_prep import bnu
+from fengsha_prep.data_downloaders import bnu
 
 
 class TestBnu(unittest.IsolatedAsyncioTestCase):
@@ -23,7 +23,7 @@ class TestBnu(unittest.IsolatedAsyncioTestCase):
         if self.output_dir.exists():
             shutil.rmtree(self.output_dir)
 
-    @patch("fengsha_prep.bnu.tomllib.load")
+    @patch("fengsha_prep.data_downloaders.bnu.tomllib.load")
     @patch("aiohttp.ClientSession", new_callable=MagicMock)
     async def test_get_bnu_data_with_mock_config(
         self, MockClientSession: MagicMock, mock_load: MagicMock
@@ -90,8 +90,8 @@ class TestBnu(unittest.IsolatedAsyncioTestCase):
         self.assertIn("dummy file", sand2_path.read_text())
 
 
-    @patch("fengsha_prep.bnu.tomllib.load")
-    @patch("fengsha_prep.bnu._download_file")
+    @patch("fengsha_prep.data_downloaders.bnu.tomllib.load")
+    @patch("fengsha_prep.data_downloaders.bnu._download_file")
     async def test_get_bnu_data_respects_concurrency_limit(
         self, mock_download_file: AsyncMock, mock_load: MagicMock
     ):

@@ -4,7 +4,7 @@ Tests for the soilgrids module.
 
 import unittest
 from unittest.mock import patch
-from fengsha_prep import soilgrids
+from fengsha_prep.data_downloaders import soilgrids
 import xarray as xr
 import numpy as np
 
