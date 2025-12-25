@@ -21,6 +21,7 @@ dependencies = [
     "aiohttp",
     "s3fs",
     "earthaccess",
+    "xgboost",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
