@@ -3,7 +3,7 @@ Global Dust Emission PIML Suite (GDE-PIML)
 Full end-to-end pipeline: Retrieval -> Physics -> ML -> Flux Projection.
 
 References:
-- Chappell & Webb (2016) [AEM]: DOI 10.1016/j.aeolia.2015.11.001
+- Chappell & Webb ((2016) [AEM]: DOI 10.1016/j.aeolia.2015.11.001
 - Leung et al. (2023) [Vegetation]: DOI 10.5194/acp-23-11235-2023
 - Marticorena & Bergametti (1995) [Flux]: DOI 10.1029/95JD00690
 - SoilGrids v2.0: DOI 10.5194/soil-7-217-2021
@@ -11,7 +11,7 @@ References:
 
 import io
 from datetime import datetime
-from typing import Any, Dict, Union
+from typing import Dict, Union
 
 import numpy as np
 import pandas as pd
@@ -21,7 +21,6 @@ import earthaccess
 import rasterio
 from owslib.wcs import WebCoverageService
 from xgboost import XGBRegressor
-from sklearn.model_selection import GroupKFold
 
 # --- CONFIGURATION & PARAMETERS ---
 IGBP_B_MAP: Dict[int, float] = {
@@ -119,13 +118,13 @@ def compute_hybrid_drag_partition(
     omega_n = 1.0 - (ds_alb["Albedo_BSW_Band1"] / ds_alb["BRDF_Albedo_Parameter_Isotropic_Band1"])
     omega_ns = ((0.0001 - 0.1) * (omega_n - 35.0) / (0.0 - 35.0)) + 0.1
     ra_bare = 0.0311 * np.exp(-omega_ns / 1.131) + 0.007
-    
+
     # Veg component (Sheltering)
     b_param = IGBP_B_MAP.get(igbp_class, 0.1)
     sigma_total = (1.0 - np.exp(-0.5 * ds_lai["Lai"])).clip(0, 1)
     lambda_total = (ds_lai["Lai"] / 2.0) + 0.05
     f_veg = (1.0 - sigma_total) * np.exp(-lambda_total / b_param)
-    
+
     return ra_bare * f_veg
 
 def compute_moisture_inhibition(
@@ -198,14 +197,13 @@ def train_piml_model(df: pd.DataFrame) -> XGBRegressor:
     """
     features = ["clay", "soc", "bdod", "R_partition", "h_w_inhibition", "lai"]
     X, y = df[features], df["u_eff_target"] # u_eff at detection time
-    
+
     # Model: XGBoost optimized for physical non-linearity
     model = XGBRegressor(n_estimators=1000, learning_rate=0.02, max_depth=7, subsample=0.8)
-    
+
     # Evaluate with GroupKFold to ensure unseen IGBP generalization
-    gkf = GroupKFold(n_splits=5)
     # (Cross-val scoring logic here...)
-    
+
     model.fit(X, y)
     return model
 
@@ -248,12 +246,9 @@ def generate_dust_flux_map(
     # 1. Feature Prep
     R = compute_hybrid_drag_partition(ds_alb, ds_lai, ds_lc["LC_Type1"])
     H = compute_moisture_inhibition(ds_met["soilw"], ds_soil["clay"], ds_soil["soc"])
-    
+
     # 2. Predict u*t (Threshold)
     # Flatten xarray DataArrays into a 1D array for prediction
-    # Ensure consistent ordering of pixels
-    pixel_count = ds_lai.lat.size * ds_lai.lon.size
-
     feature_df = pd.DataFrame({
         "clay": ds_soil["clay"].values.ravel(),
         "soc": ds_soil["soc"].values.ravel(),
@@ -272,7 +267,7 @@ def generate_dust_flux_map(
         coords=ds_lai.coords,
         dims=ds_lai.dims
     )
-    
+
     # 3. Flux Calculation (Physics)
     u_eff = (ds_met["ustar"] * R) / H
     # Saltation Q (g/m/s)
@@ -280,5 +275,5 @@ def generate_dust_flux_map(
     # Sandblasting alpha
     alpha = 10**(13.4 * (ds_soil["clay"]/100) - 6.0)
     dust_flux = Q * alpha # Vertical Flux
-    
+
     return dust_flux
