@@ -14,7 +14,7 @@ class TestSoilgrids(unittest.TestCase):
     """
 
     @patch('xarray.DataArray.to_netcdf')
-    @patch('fengsha_prep.soilgrids.SoilGrids')
+    @patch('fengsha_prep.data_downloaders.soilgrids.SoilGrids')
     def test_get_soilgrids_data(self, mock_soilgrids, mock_to_netcdf):
         """
         Tests the get_soilgrids_data function.

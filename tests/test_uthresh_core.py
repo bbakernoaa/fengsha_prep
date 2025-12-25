@@ -9,7 +9,7 @@ import xarray as xr
 from unittest.mock import patch, MagicMock
 
 # Import the functions and classes to be tested from the package
-from fengsha_prep import (
+from fengsha_prep.pipelines.uthresh.core import (
     DustDataEngine,
     compute_hybrid_drag_partition,
     compute_moisture_inhibition,
@@ -123,7 +123,7 @@ def test_prepare_balanced_training(mock_training_dataframe):
     assert len(df_out) <= len(df_in)
     assert 'texture' in df_out.columns
 
-@patch('fengsha_prep.uthresh.XGBRegressor')
+@patch('fengsha_prep.pipelines.uthresh.core.XGBRegressor')
 def test_train_piml_model(mock_xgb, mock_training_dataframe):
     """Tests the ML model training orchestration."""
     mock_model_instance = MagicMock()
@@ -144,8 +144,8 @@ def test_generate_dust_flux_map(mock_albedo_data, mock_lai_data, mock_lc_data, m
     mock_r = xr.DataArray(np.full((10, 10), 0.05), dims=mock_geo_data['dims'], coords=mock_geo_data['coords'])
     mock_h = xr.DataArray(np.full((10, 10), 1.2), dims=mock_geo_data['dims'], coords=mock_geo_data['coords'])
 
-    with patch('fengsha_prep.uthresh.compute_hybrid_drag_partition', return_value=mock_r):
-        with patch('fengsha_prep.uthresh.compute_moisture_inhibition', return_value=mock_h):
+    with patch('fengsha_prep.pipelines.uthresh.core.compute_hybrid_drag_partition', return_value=mock_r):
+        with patch('fengsha_prep.pipelines.uthresh.core.compute_moisture_inhibition', return_value=mock_h):
             result = generate_dust_flux_map(
                 mock_albedo_data, mock_lai_data, mock_lc_data, mock_soil_data, mock_met_data, mock_model
             )
@@ -158,9 +158,9 @@ def test_generate_dust_flux_map(mock_albedo_data, mock_lai_data, mock_lc_data, m
     assert result.shape == (10, 10)
     assert result.mean() > 0
 
-@patch('fengsha_prep.uthresh.earthaccess.login')
-@patch('fengsha_prep.uthresh.s3fs.S3FileSystem')
-@patch('fengsha_prep.uthresh.WebCoverageService')
+@patch('fengsha_prep.pipelines.uthresh.core.earthaccess.login')
+@patch('fengsha_prep.pipelines.uthresh.core.s3fs.S3FileSystem')
+@patch('fengsha_prep.pipelines.uthresh.core.WebCoverageService')
 def test_dust_data_engine_mocks(mock_wcs, mock_s3fs, mock_earthaccess):
     """Tests that the DustDataEngine initializes and calls its clients."""
     engine = DustDataEngine()
@@ -172,7 +172,7 @@ def test_dust_data_engine_mocks(mock_wcs, mock_s3fs, mock_earthaccess):
     mock_wcs.return_value = mock_wcs_instance
     mock_wcs_instance.getCoverage.return_value.read.return_value = b''
 
-    with patch('fengsha_prep.uthresh.rasterio.open', MagicMock()):
+    with patch('fengsha_prep.pipelines.uthresh.core.rasterio.open', MagicMock()):
         engine.fetch_soilgrids(lat=35.0, lon=-95.0)
 
     mock_wcs.assert_called_once()
