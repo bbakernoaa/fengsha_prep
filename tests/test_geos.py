@@ -10,14 +10,14 @@ sys.modules['esmpy'] = MagicMock()
 
 import xarray as xr  # noqa: E402
 import numpy as np  # noqa: E402
-from fengsha_prep import regrid  # noqa: E402
+from fengsha_prep.common import geos as regrid  # noqa: E402
 
 class TestRegrid(unittest.TestCase):
     """
     Tests for the regrid module.
     """
 
-    @patch('fengsha_prep.regrid.xe')
+    @patch('fengsha_prep.common.geos.xe')
     def test_regrid_modis_to_rectilinear(self, mock_xe):
         """
         Tests the regrid_modis_to_rectilinear function.

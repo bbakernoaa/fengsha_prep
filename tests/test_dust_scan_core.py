@@ -7,7 +7,7 @@ import pytest
 from satpy import Scene
 from unittest.mock import patch
 
-from fengsha_prep.DustSCAN import (
+from fengsha_prep.pipelines.dust_scan.core import (
     _process_scene_sync,
     detect_dust,
     cluster_events,
@@ -168,8 +168,8 @@ def test_cluster_events_with_multiple_plumes():
 
 
 @pytest.mark.asyncio
-@patch('fengsha_prep.DustSCAN._process_scene_sync')
-@patch('fengsha_prep.DustSCAN.load_scene_data')
+@patch('fengsha_prep.pipelines.dust_scan.core._process_scene_sync')
+@patch('fengsha_prep.pipelines.dust_scan.core.load_scene_data')
 async def test_dust_scan_pipeline_success(mock_load_scene, mock_process_sync):
     """
     Tests the async dust_scan_pipeline for a successful run.
@@ -193,7 +193,7 @@ async def test_dust_scan_pipeline_success(mock_load_scene, mock_process_sync):
 
 
 @pytest.mark.asyncio
-@patch('fengsha_prep.DustSCAN.load_scene_data')
+@patch('fengsha_prep.pipelines.dust_scan.core.load_scene_data')
 async def test_dust_scan_pipeline_load_fails(mock_load_scene):
     """
     Tests the async pipeline when scene loading returns None.
@@ -204,8 +204,8 @@ async def test_dust_scan_pipeline_load_fails(mock_load_scene):
 
 
 @pytest.mark.asyncio
-@patch('fengsha_prep.DustSCAN._process_scene_sync')
-@patch('fengsha_prep.DustSCAN.load_scene_data')
+@patch('fengsha_prep.pipelines.dust_scan.core._process_scene_sync')
+@patch('fengsha_prep.pipelines.dust_scan.core.load_scene_data')
 async def test_dust_scan_pipeline_process_fails(mock_load_scene, mock_process_sync):
     """
     Tests the async pipeline when the synchronous processing part fails.
@@ -256,7 +256,7 @@ def test_process_scene_sync_integration():
     assert event['satellite'] == 'goes16'
 
 
-@patch('fengsha_prep.DustSCAN.goes_s3')
+@patch('fengsha_prep.pipelines.dust_scan.core.goes_s3')
 def test_load_scene_data_file_not_found(mock_goes_s3):
     """
     Tests that load_scene_data returns None when S3 files are not found.
@@ -267,8 +267,8 @@ def test_load_scene_data_file_not_found(mock_goes_s3):
     assert scn is None
 
 
-@patch('fengsha_prep.DustSCAN.glob')
-@patch('fengsha_prep.DustSCAN.Scene')
+@patch('fengsha_prep.pipelines.dust_scan.core.glob')
+@patch('fengsha_prep.pipelines.dust_scan.core.Scene')
 def test_load_scene_data_local_fallback(mock_scene_cls, mock_glob):
     """
     Tests the local file loading fallback for a non-GOES satellite.
@@ -290,9 +290,9 @@ def test_load_scene_data_local_fallback(mock_scene_cls, mock_glob):
 
 
 @pytest.mark.asyncio
-@patch('fengsha_prep.DustSCAN.logging')
-@patch('fengsha_prep.DustSCAN._process_scene_sync')
-@patch('fengsha_prep.DustSCAN.load_scene_data')
+@patch('fengsha_prep.pipelines.dust_scan.core.logging')
+@patch('fengsha_prep.pipelines.dust_scan.core._process_scene_sync')
+@patch('fengsha_prep.pipelines.dust_scan.core.load_scene_data')
 async def test_dust_scan_pipeline_handles_processing_value_error(
     mock_load_scene, mock_process_sync, mock_logging
 ):

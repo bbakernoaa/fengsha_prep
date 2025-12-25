@@ -10,7 +10,7 @@ import xarray as xr
 from satpy import Scene
 from sklearn.cluster import DBSCAN
 
-from . import goes_s3
+from fengsha_prep.common import satellite as goes_s3
 
 # Default thresholds for dust detection, can be overridden.
 DEFAULT_THRESHOLDS: Dict[str, float] = {
