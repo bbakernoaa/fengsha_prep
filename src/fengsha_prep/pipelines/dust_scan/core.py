@@ -50,6 +50,51 @@ def get_file_pattern(sat_id: str) -> str:
         raise ValueError("Unsupported satellite.")
 
 
+def _load_scene_from_s3(scn_time: datetime.datetime, sat_id: str) -> Optional[Scene]:
+    """Loads a single satellite scene from an AWS S3 bucket."""
+    try:
+        s3_path = goes_s3.get_s3_path(sat_id, scn_time)
+        bands = goes_s3.SATELLITE_BANDS.get(sat_id)
+        if not bands:
+            raise ValueError(f"Band mapping for {sat_id} not implemented.")
+
+        # Satpy automatically uses s3fs for s3:// paths
+        scn = Scene(reader="abi_l1b", filenames=[s3_path])
+        scn.load(bands)
+        return scn.resample(resampler='native')
+    except FileNotFoundError:
+        logging.debug(f"No S3 file found for {sat_id} at {scn_time}")
+        return None
+    except Exception as e:
+        logging.error(f"Error loading GOES data for {scn_time} from S3: {e}")
+        return None
+
+
+def _load_scene_from_local(scn_time: datetime.datetime, sat_id: str) -> Optional[Scene]:
+    """Loads a single satellite scene from the local filesystem."""
+    try:
+        files = glob.glob(f'data/*{scn_time.strftime("%Y%j%H%M")}*.nc')
+        if not files:
+            logging.debug(f"No local files found for {sat_id} at {scn_time}")
+            return None
+
+        reader = get_file_pattern(sat_id)
+        scn = Scene(filenames=files, reader=reader)
+
+        if 'himawari' in sat_id:
+            bands: List[str] = ['B11', 'B13', 'B15']
+        elif 'seviri' in sat_id:
+            bands = ['IR_87', 'IR_108', 'IR_120']
+        else:
+            raise NotImplementedError(f"Band mapping for {sat_id} not implemented.")
+
+        scn.load(bands)
+        return scn.resample(resampler='native')
+    except Exception as e:
+        logging.error(f"Error loading local data for {scn_time}: {e}")
+        return None
+
+
 def load_scene_data(scn_time: datetime.datetime, sat_id: str) -> Optional[Scene]:
     """Loads and preprocesses satellite data for a single timestamp.
 
@@ -71,45 +116,9 @@ def load_scene_data(scn_time: datetime.datetime, sat_id: str) -> Optional[Scene]
         A preprocessed Satpy Scene object, or None if no files are found.
     """
     if sat_id in goes_s3.SATELLITE_CONFIG:
-        s3_path = None
-        try:
-            s3_path = goes_s3.get_s3_path(sat_id, scn_time)
-            bands = goes_s3.SATELLITE_BANDS.get(sat_id)
-            if not bands:
-                raise ValueError(f"Band mapping for {sat_id} not implemented.")
-
-            # Satpy automatically uses s3fs for s3:// paths
-            scn = Scene(reader="abi_l1b", filenames=[s3_path])
-            scn.load(bands)
-            return scn.resample(resampler='native')
-        except FileNotFoundError:
-            log_msg = f"No files found on S3 for {scn_time}"
-            if s3_path:
-                log_msg += f" at {s3_path}"
-            logging.warning(log_msg)
-            return None
-        except Exception as e:
-            logging.error(f"Error loading GOES data for {scn_time}: {e}")
-            return None
-
-    # Fallback to local file glob for other satellites
-    files = glob.glob(f'data/*{scn_time.strftime("%Y%j%H%M")}*.nc')
-    if not files:
-        logging.warning(f"No local files found for {scn_time}")
-        return None
-
-    reader = get_file_pattern(sat_id)
-    scn = Scene(filenames=files, reader=reader)
-
-    if 'himawari' in sat_id:
-        bands: List[str] = ['B11', 'B13', 'B15']
-    elif 'seviri' in sat_id:
-        bands = ['IR_87', 'IR_108', 'IR_120']
+        return _load_scene_from_s3(scn_time, sat_id)
     else:
-        raise NotImplementedError(f"Band mapping for {sat_id} not implemented.")
-
-    scn.load(bands)
-    return scn.resample(resampler='native')
+        return _load_scene_from_local(scn_time, sat_id)
 
 
 def detect_dust(scn: Scene, sat_id: str, thresholds: Dict[str, float]) -> xr.DataArray:
@@ -264,59 +273,38 @@ def _process_scene_sync(
 
 async def dust_scan_pipeline(
     scn_time: datetime.datetime, sat_id: str, thresholds: Dict[str, float]
-) -> Optional[List[Dict[str, Any]]]:
-    """Orchestrates the processing of a single satellite scene asynchronously.
+) -> List[Dict[str, Any]]:
+    """
+    Orchestrates the processing of a single satellite scene.
 
-    This function separates the I/O-bound data loading from the CPU-bound
-    data processing, running each in a separate thread to avoid blocking the
+    This function separates I/O-bound data loading from CPU-bound data
+    processing, running each in a separate thread to avoid blocking the
     asyncio event loop.
-
-    Parameters
-    ----------
-    scn_time : datetime.datetime
-        The timestamp of the scene to process.
-    sat_id : str
-        The identifier of the satellite.
-    thresholds : Dict[str, float]
-        The thresholds for dust detection.
 
     Returns
     -------
-    Optional[List[Dict[str, Any]]]
-        A list of detected dust events, or None if an error occurs or no
-        data is found.
+    List[Dict[str, Any]]
+        A list of detected dust events, or an empty list if an error occurs
+        or no data is found.
     """
-    scn = None  # Initialize scn to None
     try:
-        # I/O-bound: Load satellite data. This is a blocking operation, so we
-        # run it in a thread pool to avoid stalling the event loop.
+        # I/O-bound: Load satellite data. This is a blocking operation.
         scn = await asyncio.to_thread(load_scene_data, scn_time, sat_id)
         if scn is None:
-            # This is an expected outcome if no files are found for the given time.
-            logging.info(f"No data available for {scn_time}, skipping.")
-            return None
-    except FileNotFoundError:
-        logging.warning(f"Data file not found for {scn_time}, skipping.")
-        return None
-    except (IOError, OSError) as e:
-        logging.error(f"I/O error loading data for {scn_time}: {e}")
-        return None
-    except Exception:
-        logging.exception(f"An unexpected error occurred during data loading for {scn_time}.")
-        return None
+            # This is an expected outcome if no files are found.
+            logging.debug(f"No data available for {scn_time}, skipping.")
+            return []
 
-    try:
-        # CPU-bound: Process the loaded data. This is also blocking, so it
-        # runs in the thread pool as well.
-        return await asyncio.to_thread(
+        # CPU-bound: Process the loaded data.
+        events = await asyncio.to_thread(
             _process_scene_sync, scn, scn_time, sat_id, thresholds
         )
-    except (ValueError, KeyError, AttributeError) as e:
-        logging.error(f"Data processing error for scene {scn_time}: {e}")
-        return None
+        return events
+
     except Exception:
-        logging.exception(f"An unexpected error occurred during scene processing for {scn_time}.")
-        return None
+        # Catch any unexpected errors during the entire process.
+        logging.exception(f"Failed to process scene for {scn_time}")
+        return []
 
 
 async def run_dust_scan_in_period(
@@ -327,54 +315,38 @@ async def run_dust_scan_in_period(
     thresholds: Optional[Dict[str, float]] = None,
     concurrency_limit: int = 10
 ) -> None:
-    """Main execution loop for concurrent dust detection over a time period.
-
-    Parameters
-    ----------
-    start_time : datetime.datetime
-        The start of the time range to analyze.
-    end_time : datetime.datetime
-        The end of the time range to analyze.
-    sat_id : str
-        The identifier of the satellite (e.g., 'goes16').
-    output_csv : str
-        Path to save the resulting CSV file.
-    thresholds : Optional[Dict[str, float]], optional
-        Dictionary of thresholds for dust detection. Uses DEFAULT_THRESHOLDS
-        if None, by default None.
-    concurrency_limit : int, optional
-        The maximum number of concurrent scene processing tasks, by default 10.
+    """
+    Main execution loop for concurrent dust detection over a time period.
     """
     if thresholds is None:
         thresholds = DEFAULT_THRESHOLDS
 
     semaphore = asyncio.Semaphore(concurrency_limit)
-    all_events: List[Dict[str, Any]] = []
     tasks: List[asyncio.Task] = []
     current_time = start_time
 
-    logging.info(f"Starting analysis for {sat_id} from {start_time} to {end_time}...")
+    logging.info(f"Scanning {sat_id} from {start_time} to {end_time} with concurrency {concurrency_limit}...")
 
-    async def worker(scn_time: datetime.datetime, thresholds_dict: Dict[str, float]):
-        """Acquires semaphore and runs the scene processing."""
+    async def worker(scn_time: datetime.datetime):
         async with semaphore:
-            logging.info(f"Processing {scn_time}...")
-            events = await dust_scan_pipeline(scn_time, sat_id, thresholds_dict)
-            if events:
-                all_events.extend(events)
-                logging.info(f"  Found {len(events)} dust plumes at {scn_time}.")
+            return await dust_scan_pipeline(scn_time, sat_id, thresholds)
 
     while current_time <= end_time:
-        task = asyncio.create_task(worker(current_time, thresholds))
-        tasks.append(task)
+        tasks.append(asyncio.create_task(worker(current_time)))
         current_time += datetime.timedelta(minutes=15)
 
-    await asyncio.gather(*tasks)
+    # Process tasks as they complete to keep memory usage flat
+    all_events: List[Dict[str, Any]] = []
+    for future in asyncio.as_completed(tasks):
+        events = await future
+        if events:
+            all_events.extend(events)
+            logging.info(f"Found {len(events)} dust plumes at {events[0]['datetime']}.")
 
     if all_events:
-        df = pd.DataFrame(all_events)
+        df = pd.DataFrame(all_events).sort_values(by='datetime').reset_index(drop=True)
         df.to_csv(output_csv, index=False)
-        logging.info(f"Success! Saved {len(df)} events to {output_csv}")
+        logging.info(f"✅ Success! Saved {len(df)} total events to {output_csv}")
     else:
         logging.info("No dust events detected in this period.")
 
