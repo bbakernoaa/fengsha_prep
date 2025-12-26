@@ -5,7 +5,7 @@ import numpy as np
 import xarray as xr
 import pytest
 from satpy import Scene
-from unittest.mock import patch
+from unittest.mock import patch, ANY
 
 from fengsha_prep.pipelines.dust_scan.core import (
     _process_scene_sync,
@@ -14,6 +14,8 @@ from fengsha_prep.pipelines.dust_scan.core import (
     DEFAULT_THRESHOLDS,
     dust_scan_pipeline,
     load_scene_data,
+    _load_scene_from_s3,
+    _load_scene_from_local,
 )
 
 
@@ -46,9 +48,10 @@ def mock_scene() -> Scene:
     }
 
     # Use a mock for the Satpy Scene object
-    scene = MagicMock(spec=Scene)
-    scene.__getitem__.side_effect = lambda key: bands[key]
-    scene.keys.return_value = bands.keys()
+    scene = Scene()
+    scene['C11'] = bands['C11']
+    scene['C13'] = bands['C13']
+    scene['C15'] = bands['C15']
 
     return scene
 
@@ -185,7 +188,7 @@ async def test_dust_scan_pipeline_success(mock_load_scene, mock_process_sync):
 
     events = await dust_scan_pipeline(mock_scn_time, mock_sat_id, mock_thresholds)
 
-    mock_load_scene.assert_called_once_with(mock_scn_time, mock_sat_id)
+    mock_load_scene.assert_called_once_with(mock_scn_time, mock_sat_id, ANY)
     mock_process_sync.assert_called_once_with(
         mock_scene_obj, mock_scn_time, mock_sat_id, mock_thresholds
     )
@@ -233,14 +236,10 @@ def test_process_scene_sync_integration():
     b12_data = 290 * np.ones(shape)
     b12_data[295:305, 295:305] = 280  # Dust patch
 
-    mock_scene = MagicMock(spec=Scene)
-    mock_scene.__getitem__.side_effect = lambda key: {
-        'C11': xr.DataArray(b08_data, coords=coords, dims=dims),
-        'C13': xr.DataArray(b10_data, coords=coords, dims=dims),
-        'C15': xr.DataArray(b12_data, coords=coords, dims=dims),
-    }[key]
-    mock_scene.keys.return_value = ['C11', 'C13', 'C15']
-
+    mock_scene = Scene()
+    mock_scene['C11'] = xr.DataArray(b08_data, coords=coords, dims=dims)
+    mock_scene['C13'] = xr.DataArray(b10_data, coords=coords, dims=dims)
+    mock_scene['C15'] = xr.DataArray(b12_data, coords=coords, dims=dims)
 
     scn_time = datetime.datetime.now()
     sat_id = 'goes16'
@@ -256,33 +255,32 @@ def test_process_scene_sync_integration():
     assert event['satellite'] == 'goes16'
 
 
-@patch('fengsha_prep.pipelines.dust_scan.core.goes_s3')
+@patch('fengsha_prep.pipelines.dust_scan.core.satellite')
 @patch('fengsha_prep.pipelines.dust_scan.core.Scene')
-def test_load_scene_from_s3_success(mock_scene_cls, mock_goes_s3):
+def test_load_scene_from_s3_success(mock_scene_cls, mock_satellite):
     """
     Tests that _load_scene_from_s3 successfully loads a scene from S3.
     """
-    mock_goes_s3.get_s3_path.return_value = 's3://bucket/file.nc'
-    mock_goes_s3.SATELLITE_BANDS = {'goes16': ['C01', 'C02', 'C03']}
+    mock_satellite.get_s3_path.return_value = 's3://bucket/file.nc'
+    meta = {'reader': 'abi_l1b', 'bands': ['C01', 'C02', 'C03']}
     mock_scene_instance = mock_scene_cls.return_value
     mock_scene_instance.resample.return_value = mock_scene_instance
 
-    from fengsha_prep.pipelines.dust_scan.core import _load_scene_from_s3
-    scn = _load_scene_from_s3(datetime.datetime.now(), 'goes16')
+    scn = _load_scene_from_s3(datetime.datetime.now(), 'goes16', meta)
 
     assert scn is not None
     mock_scene_cls.assert_called_once_with(reader="abi_l1b", filenames=['s3://bucket/file.nc'])
     mock_scene_instance.load.assert_called_once_with(['C01', 'C02', 'C03'])
 
 
-@patch('fengsha_prep.pipelines.dust_scan.core.goes_s3')
-def test_load_scene_from_s3_not_found(mock_goes_s3):
+@patch('fengsha_prep.pipelines.dust_scan.core.satellite')
+def test_load_scene_from_s3_not_found(mock_satellite):
     """
     Tests that _load_scene_from_s3 returns None when the file is not found.
     """
-    mock_goes_s3.get_s3_path.side_effect = FileNotFoundError
-    from fengsha_prep.pipelines.dust_scan.core import _load_scene_from_s3
-    scn = _load_scene_from_s3(datetime.datetime.now(), 'goes16')
+    mock_satellite.get_s3_path.side_effect = FileNotFoundError
+    meta = {'reader': 'abi_l1b', 'bands': ['C01', 'C02', 'C03']}
+    scn = _load_scene_from_s3(datetime.datetime.now(), 'goes16', meta)
     assert scn is None
 
 
@@ -293,11 +291,11 @@ def test_load_scene_from_local_success(mock_scene_cls, mock_glob):
     Tests that _load_scene_from_local successfully loads a scene from the local filesystem.
     """
     mock_glob.glob.return_value = ['data/himawari_file.nc']
+    meta = {'reader': 'ahi_hsd', 'bands': ['B11', 'B13', 'B15']}
     mock_scene_instance = mock_scene_cls.return_value
     mock_scene_instance.resample.return_value = mock_scene_instance
 
-    from fengsha_prep.pipelines.dust_scan.core import _load_scene_from_local
-    scn = _load_scene_from_local(datetime.datetime.now(), 'himawari8')
+    scn = _load_scene_from_local(datetime.datetime.now(), 'himawari8', meta)
 
     assert scn is not None
     mock_scene_cls.assert_called_once_with(filenames=['data/himawari_file.nc'], reader='ahi_hsd')
@@ -310,33 +308,33 @@ def test_load_scene_from_local_not_found(mock_glob):
     Tests that _load_scene_from_local returns None when no files are found.
     """
     mock_glob.glob.return_value = []
-    from fengsha_prep.pipelines.dust_scan.core import _load_scene_from_local
-    scn = _load_scene_from_local(datetime.datetime.now(), 'himawari8')
+    meta = {'reader': 'ahi_hsd', 'bands': ['B11', 'B13', 'B15']}
+    scn = _load_scene_from_local(datetime.datetime.now(), 'himawari8', meta)
     assert scn is None
 
 
 @patch('fengsha_prep.pipelines.dust_scan.core._load_scene_from_s3')
-@patch('fengsha_prep.pipelines.dust_scan.core.goes_s3')
-def test_load_scene_data_dispatches_to_s3(mock_goes_s3, mock_load_s3):
+@patch('fengsha_prep.pipelines.dust_scan.core.satellite')
+def test_load_scene_data_dispatches_to_s3(mock_satellite, mock_load_s3):
     """
     Tests that load_scene_data calls the S3 loader for GOES satellites.
     """
-    mock_goes_s3.SATELLITE_CONFIG = {'goes16': {}}
+    mock_satellite.get_satellite_metadata.return_value = {'is_s3': True}
     scn_time = datetime.datetime.now()
     load_scene_data(scn_time, 'goes16')
-    mock_load_s3.assert_called_once_with(scn_time, 'goes16')
+    mock_load_s3.assert_called_once_with(scn_time, 'goes16', {'is_s3': True})
 
 
 @patch('fengsha_prep.pipelines.dust_scan.core._load_scene_from_local')
-@patch('fengsha_prep.pipelines.dust_scan.core.goes_s3')
-def test_load_scene_data_dispatches_to_local(mock_goes_s3, mock_load_local):
+@patch('fengsha_prep.pipelines.dust_scan.core.satellite')
+def test_load_scene_data_dispatches_to_local(mock_satellite, mock_load_local):
     """
     Tests that load_scene_data calls the local loader for non-GOES satellites.
     """
-    mock_goes_s3.SATELLITE_CONFIG = {}  # Empty config means it's not a GOES satellite
+    mock_satellite.get_satellite_metadata.return_value = {'is_s3': False}
     scn_time = datetime.datetime.now()
     load_scene_data(scn_time, 'himawari8')
-    mock_load_local.assert_called_once_with(scn_time, 'himawari8')
+    mock_load_local.assert_called_once_with(scn_time, 'himawari8', {'is_s3': False}, data_dir=None)
 
 
 @pytest.mark.asyncio
