@@ -3,7 +3,7 @@ Utilities for handling satellite data.
 """
 import datetime
 import s3fs
-from typing import List, Dict, Any
+from typing import Dict, Any
 
 SATELLITE_METADATA: Dict[str, Dict[str, Any]] = {
     "goes16": {

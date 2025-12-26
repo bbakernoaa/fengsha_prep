@@ -1,6 +1,6 @@
 import asyncio
 import datetime
-from unittest.mock import patch, MagicMock, ANY
+from unittest.mock import patch, ANY
 
 import numpy as np
 import pytest
