@@ -37,14 +37,15 @@ class TestBnu(unittest.IsolatedAsyncioTestCase):
             "bnu_data": {
                 "sand_urls": [
                     "http://not-a-real-site.com/sand1.nc",
-                    "http://example.com/sand2.nc",  # Placeholder to test both paths
+                    "http://not-a-real-site.com/sand2.nc",
                 ]
             }
         }
 
         # 2. Create the mock response object.
         mock_response = AsyncMock()
-        mock_response.raise_for_status.return_value = None
+        # `raise_for_status` is a synchronous method on the response object.
+        mock_response.raise_for_status = MagicMock(return_value=None)
         mock_response.read.return_value = b"test content"
 
         # This is the async context manager that session.get() returns.
@@ -78,8 +79,10 @@ class TestBnu(unittest.IsolatedAsyncioTestCase):
         expected_files.sort(key=lambda p: p.name)
         self.assertEqual([str(p) for p in downloaded_files], [str(p) for p in expected_files])
 
-        # Check that the download URL was called
-        mock_session.get.assert_called_once_with("http://not-a-real-site.com/sand1.nc")
+        # Check that both URLs were called
+        self.assertEqual(mock_session.get.call_count, 2)
+        mock_session.get.assert_any_call("http://not-a-real-site.com/sand1.nc")
+        mock_session.get.assert_any_call("http://not-a-real-site.com/sand2.nc")
 
         # Check that files were created and have the correct content
         sand1_path = self.output_dir / "sand1.nc"
@@ -87,7 +90,7 @@ class TestBnu(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(sand1_path.exists())
         self.assertEqual(sand1_path.read_bytes(), b"test content")
         self.assertTrue(sand2_path.exists())
-        self.assertIn("dummy file", sand2_path.read_text())
+        self.assertEqual(sand2_path.read_bytes(), b"test content")
 
 
     @patch("fengsha_prep.data_downloaders.bnu.tomllib.load")
