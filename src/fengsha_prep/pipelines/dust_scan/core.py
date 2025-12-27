@@ -10,7 +10,7 @@ import xarray as xr
 from satpy import Scene
 from sklearn.cluster import DBSCAN
 
-from fengsha_prep.common import satellite as goes_s3
+from fengsha_prep.common import satellite
 
 # Default thresholds for dust detection, can be overridden.
 DEFAULT_THRESHOLDS: Dict[str, float] = {
@@ -22,45 +22,15 @@ DEFAULT_THRESHOLDS: Dict[str, float] = {
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-def get_file_pattern(sat_id: str) -> str:
-    """Gets the satpy reader name for a given satellite.
-
-    Parameters
-    ----------
-    sat_id : str
-        The identifier of the satellite (e.g., 'goes16', 'himawari8').
-
-    Returns
-    -------
-    str
-        The corresponding satpy reader name.
-
-    Raises
-    ------
-    ValueError
-        If the satellite is not supported.
-    """
-    if 'goes' in sat_id:
-        return 'abi_l1b'
-    elif 'himawari' in sat_id:
-        return 'ahi_hsd'
-    elif 'seviri' in sat_id:
-        return 'seviri_l1b_native'
-    else:
-        raise ValueError("Unsupported satellite.")
-
-
-def _load_scene_from_s3(scn_time: datetime.datetime, sat_id: str) -> Optional[Scene]:
+def _load_scene_from_s3(
+    scn_time: datetime.datetime, sat_id: str, meta: Dict[str, Any]
+) -> Optional[Scene]:
     """Loads a single satellite scene from an AWS S3 bucket."""
     try:
-        s3_path = goes_s3.get_s3_path(sat_id, scn_time)
-        bands = goes_s3.SATELLITE_BANDS.get(sat_id)
-        if not bands:
-            raise ValueError(f"Band mapping for {sat_id} not implemented.")
-
+        s3_path = satellite.get_s3_path(sat_id, scn_time)
         # Satpy automatically uses s3fs for s3:// paths
-        scn = Scene(reader="abi_l1b", filenames=[s3_path])
-        scn.load(bands)
+        scn = Scene(reader=meta["reader"], filenames=[s3_path])
+        scn.load(meta["bands"])
         return scn.resample(resampler='native')
     except FileNotFoundError:
         logging.debug(f"No S3 file found for {sat_id} at {scn_time}")
@@ -70,32 +40,31 @@ def _load_scene_from_s3(scn_time: datetime.datetime, sat_id: str) -> Optional[Sc
         return None
 
 
-def _load_scene_from_local(scn_time: datetime.datetime, sat_id: str) -> Optional[Scene]:
+def _load_scene_from_local(
+    scn_time: datetime.datetime,
+    sat_id: str,
+    meta: Dict[str, Any],
+    data_dir: Optional[str] = None,
+) -> Optional[Scene]:
     """Loads a single satellite scene from the local filesystem."""
     try:
-        files = glob.glob(f'data/*{scn_time.strftime("%Y%j%H%M")}*.nc')
+        search_dir = data_dir if data_dir is not None else 'data'
+        files = glob.glob(f'{search_dir}/*{scn_time.strftime("%Y%j%H%M")}*.nc')
         if not files:
-            logging.debug(f"No local files found for {sat_id} at {scn_time}")
+            logging.debug(f"No local files found for {sat_id} at {scn_time} in {search_dir}")
             return None
 
-        reader = get_file_pattern(sat_id)
-        scn = Scene(filenames=files, reader=reader)
-
-        if 'himawari' in sat_id:
-            bands: List[str] = ['B11', 'B13', 'B15']
-        elif 'seviri' in sat_id:
-            bands = ['IR_87', 'IR_108', 'IR_120']
-        else:
-            raise NotImplementedError(f"Band mapping for {sat_id} not implemented.")
-
-        scn.load(bands)
+        scn = Scene(filenames=files, reader=meta["reader"])
+        scn.load(meta["bands"])
         return scn.resample(resampler='native')
     except Exception as e:
         logging.error(f"Error loading local data for {scn_time}: {e}")
         return None
 
 
-def load_scene_data(scn_time: datetime.datetime, sat_id: str) -> Optional[Scene]:
+def load_scene_data(
+    scn_time: datetime.datetime, sat_id: str, data_dir: Optional[str] = None
+) -> Optional[Scene]:
     """Loads and preprocesses satellite data for a single timestamp.
 
     This function finds the relevant satellite data file(s) for a given time,
@@ -109,16 +78,23 @@ def load_scene_data(scn_time: datetime.datetime, sat_id: str) -> Optional[Scene]
         The timestamp for which to load data.
     sat_id : str
         The identifier of the satellite.
+    data_dir : Optional[str]
+        The directory to search for local data files. Defaults to 'data'.
 
     Returns
     -------
     Optional[Scene]
         A preprocessed Satpy Scene object, or None if no files are found.
     """
-    if sat_id in goes_s3.SATELLITE_CONFIG:
-        return _load_scene_from_s3(scn_time, sat_id)
+    meta = satellite.get_satellite_metadata(sat_id)
+    if not meta:
+        logging.error(f"Unsupported satellite: {sat_id}")
+        return None
+
+    if meta.get("is_s3", False):
+        return _load_scene_from_s3(scn_time, sat_id, meta)
     else:
-        return _load_scene_from_local(scn_time, sat_id)
+        return _load_scene_from_local(scn_time, sat_id, meta, data_dir=data_dir)
 
 
 def detect_dust(scn: Scene, sat_id: str, thresholds: Dict[str, float]) -> xr.DataArray:
@@ -144,17 +120,12 @@ def detect_dust(scn: Scene, sat_id: str, thresholds: Dict[str, float]) -> xr.Dat
         A binary dust mask (1=Dust, 0=No Dust) with coordinate information
         and a 'history' attribute documenting the processing.
     """
-    if sat_id in goes_s3.SATELLITE_CONFIG:
-        bands = goes_s3.SATELLITE_BANDS.get(sat_id)
-        if not bands or len(bands) < 3:
-            raise ValueError(f"Invalid band configuration for {sat_id}")
-        b08, b10, b12 = scn[bands[0]], scn[bands[1]], scn[bands[2]]
-    elif 'himawari' in sat_id:
-        b08, b10, b12 = scn['B11'], scn['B13'], scn['B15']
-    elif 'seviri' in sat_id:
-        b08, b10, b12 = scn['IR_87'], scn['IR_108'], scn['IR_120']
-    else:
-        raise NotImplementedError(f"Dust detection for {sat_id} not implemented.")
+    meta = satellite.get_satellite_metadata(sat_id)
+    if not meta or "bands" not in meta or len(meta["bands"]) < 3:
+        raise ValueError(f"Invalid band configuration for {sat_id}")
+
+    bands = meta["bands"]
+    b08, b10, b12 = scn[bands[0]], scn[bands[1]], scn[bands[2]]
 
     diff_12_10 = b12 - b10
     diff_10_8 = b10 - b08
@@ -167,7 +138,7 @@ def detect_dust(scn: Scene, sat_id: str, thresholds: Dict[str, float]) -> xr.Dat
 
     # --- Add Provenance ---
     history_log = (
-        f"Dust mask generated at {datetime.datetime.utcnow().isoformat()}Z. "
+        f"Dust mask generated at {datetime.datetime.now(datetime.UTC).isoformat()}Z. "
         f"Satellite: {sat_id}. Thresholds: {thresholds}."
     )
     dust_mask.attrs['history'] = history_log
@@ -272,7 +243,10 @@ def _process_scene_sync(
 
 
 async def dust_scan_pipeline(
-    scn_time: datetime.datetime, sat_id: str, thresholds: Dict[str, float]
+    scn_time: datetime.datetime,
+    sat_id: str,
+    thresholds: Dict[str, float],
+    data_dir: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Orchestrates the processing of a single satellite scene.
@@ -289,7 +263,7 @@ async def dust_scan_pipeline(
     """
     try:
         # I/O-bound: Load satellite data. This is a blocking operation.
-        scn = await asyncio.to_thread(load_scene_data, scn_time, sat_id)
+        scn = await asyncio.to_thread(load_scene_data, scn_time, sat_id, data_dir)
         if scn is None:
             # This is an expected outcome if no files are found.
             logging.debug(f"No data available for {scn_time}, skipping.")
@@ -313,7 +287,8 @@ async def run_dust_scan_in_period(
     sat_id: str,
     output_csv: str,
     thresholds: Optional[Dict[str, float]] = None,
-    concurrency_limit: int = 10
+    concurrency_limit: int = 10,
+    data_dir: Optional[str] = None,
 ) -> None:
     """
     Main execution loop for concurrent dust detection over a time period.
@@ -329,7 +304,7 @@ async def run_dust_scan_in_period(
 
     async def worker(scn_time: datetime.datetime):
         async with semaphore:
-            return await dust_scan_pipeline(scn_time, sat_id, thresholds)
+            return await dust_scan_pipeline(scn_time, sat_id, thresholds, data_dir=data_dir)
 
     while current_time <= end_time:
         tasks.append(asyncio.create_task(worker(current_time)))
@@ -379,11 +354,18 @@ if __name__ == '__main__':
         default='dust_events.csv',
         help="Output CSV file path."
     )
+    parser.add_argument(
+        '--data-dir',
+        type=str,
+        default=None,
+        help="Directory for local satellite data. Defaults to 'data'."
+    )
     args = parser.parse_args()
 
     asyncio.run(run_dust_scan_in_period(
         start_time=args.start,
         end_time=args.end,
         sat_id=args.sat,
-        output_csv=args.output
+        output_csv=args.output,
+        data_dir=args.data_dir
     ))
