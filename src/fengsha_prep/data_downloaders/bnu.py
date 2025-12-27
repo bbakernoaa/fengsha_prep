@@ -72,7 +72,6 @@ async def get_bnu_data(
     output_path.mkdir(parents=True, exist_ok=True)
 
     semaphore = asyncio.Semaphore(concurrency_limit)
-    placeholder_files: List[Path] = []
     tasks = []
 
     async def worker(session: aiohttp.ClientSession, url: str, filepath: Path):
@@ -84,21 +83,13 @@ async def get_bnu_data(
         for url in urls:
             filename = url.split("/")[-1]
             filepath = output_path / filename
-
-            # Skip downloading from placeholder URLs, but create dummy files for testing
-            if "example.com" in url:
-                logger.info(f"Skipping placeholder URL: {url}")
-                filepath.write_text(f"This is a dummy file for {filename}")
-                placeholder_files.append(filepath)
-                continue
-
             task = asyncio.create_task(worker(session, url, filepath))
             tasks.append(task)
 
         results = await asyncio.gather(*tasks)
     successful_downloads = [res for res in results if res is not None]
 
-    return placeholder_files + successful_downloads
+    return successful_downloads
 
 
 if __name__ == "__main__":
