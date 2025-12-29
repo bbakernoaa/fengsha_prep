@@ -1,5 +1,5 @@
 import datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, AsyncMock
 
 import numpy as np
 import xarray as xr
@@ -172,7 +172,7 @@ def test_cluster_events_with_multiple_plumes():
 
 @pytest.mark.asyncio
 @patch('fengsha_prep.pipelines.dust_scan.core._process_scene_sync')
-@patch('fengsha_prep.pipelines.dust_scan.core.load_scene_data')
+@patch('fengsha_prep.pipelines.dust_scan.core.load_scene_data', new_callable=AsyncMock)
 async def test_dust_scan_pipeline_success(mock_load_scene, mock_process_sync):
     """
     Tests the async dust_scan_pipeline for a successful run.
@@ -183,12 +183,14 @@ async def test_dust_scan_pipeline_success(mock_load_scene, mock_process_sync):
     mock_scene_obj = MagicMock()
     expected_events = [{'event': 1}]
 
+    # Configure the async mock
     mock_load_scene.return_value = mock_scene_obj
+    # The sync mock remains the same
     mock_process_sync.return_value = expected_events
 
     events = await dust_scan_pipeline(mock_scn_time, mock_sat_id, mock_thresholds)
 
-    mock_load_scene.assert_called_once_with(mock_scn_time, mock_sat_id, ANY)
+    mock_load_scene.assert_awaited_once_with(mock_scn_time, mock_sat_id, ANY)
     mock_process_sync.assert_called_once_with(
         mock_scene_obj, mock_scn_time, mock_sat_id, mock_thresholds
     )
@@ -196,7 +198,7 @@ async def test_dust_scan_pipeline_success(mock_load_scene, mock_process_sync):
 
 
 @pytest.mark.asyncio
-@patch('fengsha_prep.pipelines.dust_scan.core.load_scene_data')
+@patch('fengsha_prep.pipelines.dust_scan.core.load_scene_data', new_callable=AsyncMock)
 async def test_dust_scan_pipeline_load_fails(mock_load_scene):
     """
     Tests the async pipeline when scene loading returns None.
@@ -208,7 +210,7 @@ async def test_dust_scan_pipeline_load_fails(mock_load_scene):
 
 @pytest.mark.asyncio
 @patch('fengsha_prep.pipelines.dust_scan.core._process_scene_sync')
-@patch('fengsha_prep.pipelines.dust_scan.core.load_scene_data')
+@patch('fengsha_prep.pipelines.dust_scan.core.load_scene_data', new_callable=AsyncMock)
 async def test_dust_scan_pipeline_process_fails(mock_load_scene, mock_process_sync):
     """
     Tests the async pipeline when the synchronous processing part fails.
@@ -255,32 +257,53 @@ def test_process_scene_sync_integration():
     assert event['satellite'] == 'goes16'
 
 
+from unittest.mock import AsyncMock
+
+@pytest.mark.asyncio
+@patch('fengsha_prep.pipelines.dust_scan.core.asyncio.to_thread')
+@patch('fengsha_prep.pipelines.dust_scan.core.s3fs.S3FileSystem')
 @patch('fengsha_prep.pipelines.dust_scan.core.satellite')
-@patch('fengsha_prep.pipelines.dust_scan.core.Scene')
-def test_load_scene_from_s3_success(mock_scene_cls, mock_satellite):
+async def test_load_scene_from_s3_async_success(mock_satellite, mock_s3fs, mock_to_thread):
     """
-    Tests that _load_scene_from_s3 successfully loads a scene from S3.
+    Tests the refactored, async-native _load_scene_from_s3 function.
     """
+    # --- Setup ---
+    mock_s3_instance = mock_s3fs.return_value
+    mock_s3_instance.exists = AsyncMock(return_value=True)
+    mock_satellite.get_s3_path.return_value = 's3://bucket/file.nc'
+
+    mock_scene = MagicMock(spec=Scene)
+    mock_to_thread.return_value = mock_scene
+    meta = {'reader': 'abi_l1b', 'bands': ['C01', 'C02', 'C03']}
+
+    # --- Execution ---
+    scn_time = datetime.datetime.now()
+    scn = await _load_scene_from_s3(scn_time, 'goes16', meta)
+
+    # --- Verification ---
+    assert scn is mock_scene
+    mock_s3fs.assert_called_once_with(asynchronous=True)
+    mock_s3_instance.exists.assert_awaited_once_with('s3://bucket/file.nc')
+    mock_to_thread.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@patch('fengsha_prep.pipelines.dust_scan.core.s3fs.S3FileSystem')
+@patch('fengsha_prep.pipelines.dust_scan.core.satellite')
+async def test_load_scene_from_s3_async_not_found(mock_satellite, mock_s3fs):
+    """
+    Tests that the async S3 loader returns None when the file does not exist.
+    """
+    # --- Setup ---
+    mock_s3_instance = mock_s3fs.return_value
+    mock_s3_instance.exists = AsyncMock(return_value=False)
     mock_satellite.get_s3_path.return_value = 's3://bucket/file.nc'
     meta = {'reader': 'abi_l1b', 'bands': ['C01', 'C02', 'C03']}
-    mock_scene_instance = mock_scene_cls.return_value
-    mock_scene_instance.resample.return_value = mock_scene_instance
 
-    scn = _load_scene_from_s3(datetime.datetime.now(), 'goes16', meta)
+    # --- Execution ---
+    scn = await _load_scene_from_s3(datetime.datetime.now(), 'goes16', meta)
 
-    assert scn is not None
-    mock_scene_cls.assert_called_once_with(reader="abi_l1b", filenames=['s3://bucket/file.nc'])
-    mock_scene_instance.load.assert_called_once_with(['C01', 'C02', 'C03'])
-
-
-@patch('fengsha_prep.pipelines.dust_scan.core.satellite')
-def test_load_scene_from_s3_not_found(mock_satellite):
-    """
-    Tests that _load_scene_from_s3 returns None when the file is not found.
-    """
-    mock_satellite.get_s3_path.side_effect = FileNotFoundError
-    meta = {'reader': 'abi_l1b', 'bands': ['C01', 'C02', 'C03']}
-    scn = _load_scene_from_s3(datetime.datetime.now(), 'goes16', meta)
+    # --- Verification ---
     assert scn is None
 
 
@@ -313,28 +336,41 @@ def test_load_scene_from_local_not_found(mock_glob):
     assert scn is None
 
 
-@patch('fengsha_prep.pipelines.dust_scan.core._load_scene_from_s3')
+@pytest.mark.asyncio
+@patch('fengsha_prep.pipelines.dust_scan.core._load_scene_from_s3', new_callable=AsyncMock)
 @patch('fengsha_prep.pipelines.dust_scan.core.satellite')
-def test_load_scene_data_dispatches_to_s3(mock_satellite, mock_load_s3):
+async def test_load_scene_data_dispatches_to_s3(mock_satellite, mock_load_s3):
     """
-    Tests that load_scene_data calls the S3 loader for GOES satellites.
+    Tests that load_scene_data calls the async S3 loader for S3-based satellites.
     """
     mock_satellite.get_satellite_metadata.return_value = {'is_s3': True}
     scn_time = datetime.datetime.now()
-    load_scene_data(scn_time, 'goes16')
-    mock_load_s3.assert_called_once_with(scn_time, 'goes16', {'is_s3': True})
+
+    await load_scene_data(scn_time, 'goes16')
+
+    mock_load_s3.assert_awaited_once_with(scn_time, 'goes16', {'is_s3': True})
 
 
+@pytest.mark.asyncio
+@patch('fengsha_prep.pipelines.dust_scan.core.asyncio.to_thread')
 @patch('fengsha_prep.pipelines.dust_scan.core._load_scene_from_local')
 @patch('fengsha_prep.pipelines.dust_scan.core.satellite')
-def test_load_scene_data_dispatches_to_local(mock_satellite, mock_load_local):
+async def test_load_scene_data_dispatches_to_local(mock_satellite, mock_load_local, mock_to_thread):
     """
-    Tests that load_scene_data calls the local loader for non-GOES satellites.
+    Tests that load_scene_data calls the local loader via to_thread for non-S3 satellites.
     """
     mock_satellite.get_satellite_metadata.return_value = {'is_s3': False}
     scn_time = datetime.datetime.now()
-    load_scene_data(scn_time, 'himawari8')
-    mock_load_local.assert_called_once_with(scn_time, 'himawari8', {'is_s3': False}, data_dir=None)
+
+    await load_scene_data(scn_time, 'himawari8', data_dir='test_dir')
+
+    # Verify that the blocking function was called inside a thread
+    mock_to_thread.assert_awaited_once()
+    # And that the original function was passed to the thread with the correct args
+    assert mock_to_thread.call_args[0][0] == mock_load_local
+    assert mock_to_thread.call_args[0][1] == scn_time
+    assert mock_to_thread.call_args[0][3] == {'is_s3': False}
+    assert mock_to_thread.call_args[1]['data_dir'] == 'test_dir'
 
 
 @pytest.mark.asyncio

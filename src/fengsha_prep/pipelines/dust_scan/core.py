@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import glob
 import logging
+import s3fs
 from typing import List, Dict, Any, Optional
 
 import numpy as np
@@ -22,19 +23,26 @@ DEFAULT_THRESHOLDS: Dict[str, float] = {
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-def _load_scene_from_s3(
+async def _load_scene_from_s3(
     scn_time: datetime.datetime, sat_id: str, meta: Dict[str, Any]
 ) -> Optional[Scene]:
-    """Loads a single satellite scene from an AWS S3 bucket."""
+    """Asynchronously loads a single satellite scene from an AWS S3 bucket."""
+    s3 = s3fs.S3FileSystem(asynchronous=True)
     try:
         s3_path = satellite.get_s3_path(sat_id, scn_time)
-        # Satpy automatically uses s3fs for s3:// paths
-        scn = Scene(reader=meta["reader"], filenames=[s3_path])
-        scn.load(meta["bands"])
-        return scn.resample(resampler='native')
-    except FileNotFoundError:
-        logging.debug(f"No S3 file found for {sat_id} at {scn_time}")
-        return None
+        if not await s3.exists(s3_path):
+            logging.debug(f"No S3 file found for {sat_id} at {scn_time}")
+            return None
+
+        # Satpy's Scene is blocking, so we run it in a thread.
+        # The key is that the file check (`s3.exists`) is non-blocking.
+        def _blocking_load():
+            scn = Scene(reader=meta["reader"], filenames=[s3_path])
+            scn.load(meta["bands"])
+            return scn.resample(resampler='native')
+
+        return await asyncio.to_thread(_blocking_load)
+
     except Exception as e:
         logging.error(f"Error loading GOES data for {scn_time} from S3: {e}")
         return None
@@ -62,7 +70,7 @@ def _load_scene_from_local(
         return None
 
 
-def load_scene_data(
+async def load_scene_data(
     scn_time: datetime.datetime, sat_id: str, data_dir: Optional[str] = None
 ) -> Optional[Scene]:
     """Loads and preprocesses satellite data for a single timestamp.
@@ -92,9 +100,12 @@ def load_scene_data(
         return None
 
     if meta.get("is_s3", False):
-        return _load_scene_from_s3(scn_time, sat_id, meta)
+        return await _load_scene_from_s3(scn_time, sat_id, meta)
     else:
-        return _load_scene_from_local(scn_time, sat_id, meta, data_dir=data_dir)
+        # Local file I/O is also blocking, so run it in a thread.
+        return await asyncio.to_thread(
+            _load_scene_from_local, scn_time, sat_id, meta, data_dir=data_dir
+        )
 
 
 def detect_dust(scn: Scene, sat_id: str, thresholds: Dict[str, float]) -> xr.DataArray:
@@ -262,8 +273,8 @@ async def dust_scan_pipeline(
         or no data is found.
     """
     try:
-        # I/O-bound: Load satellite data. This is a blocking operation.
-        scn = await asyncio.to_thread(load_scene_data, scn_time, sat_id, data_dir)
+        # Await the natively async data loading function.
+        scn = await load_scene_data(scn_time, sat_id, data_dir)
         if scn is None:
             # This is an expected outcome if no files are found.
             logging.debug(f"No data available for {scn_time}, skipping.")
