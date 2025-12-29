@@ -1,11 +1,10 @@
 import datetime
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock, patch, ANY, AsyncMock
 
 import numpy as np
 import xarray as xr
 import pytest
 from satpy import Scene
-from unittest.mock import patch, ANY
 
 from fengsha_prep.pipelines.dust_scan.core import (
     _process_scene_sync,
@@ -256,8 +255,6 @@ def test_process_scene_sync_integration():
     assert event['area_pixels'] == 100
     assert event['satellite'] == 'goes16'
 
-
-from unittest.mock import AsyncMock
 
 @pytest.mark.asyncio
 @patch('fengsha_prep.pipelines.dust_scan.core.asyncio.to_thread')
