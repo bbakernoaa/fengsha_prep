@@ -44,30 +44,14 @@ async def _download_file(
         return None
 
 
-async def get_bnu_data(
-    data_type: str,
-    output_dir: str = "bnu_data",
-    concurrency_limit: int = 10,
+async def _download_files_concurrently(
+    urls: List[str],
+    output_dir: str,
+    concurrency_limit: int,
 ) -> List[Path]:
     """
-    Asynchronously retrieves soil data from the BNU soil dataset by downloading
-    it concurrently from URLs specified in the configuration file.
-
-    Args:
-        data_type: The type of data to retrieve (e.g., 'sand', 'silt', 'clay').
-        output_dir: The directory where the downloaded files will be saved.
-        concurrency_limit: The maximum number of concurrent downloads.
-
-    Returns:
-        A list of file paths for the downloaded data.
+    Asynchronously downloads files from a list of URLs concurrently.
     """
-    config = load_config()
-    urls = config.get("bnu_data", {}).get(f"{data_type}_urls", [])
-
-    if not urls:
-        logger.warning(f"No URLs found for data type: {data_type}")
-        return []
-
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
@@ -92,6 +76,33 @@ async def get_bnu_data(
     return successful_downloads
 
 
+async def bnu_downloader(
+    data_type: str,
+    output_dir: str = "bnu_data",
+    concurrency_limit: int = 10,
+) -> List[Path]:
+    """
+    Asynchronously retrieves soil data from the BNU soil dataset by downloading
+    it concurrently from URLs specified in the configuration file.
+
+    Args:
+        data_type: The type of data to retrieve (e.g., 'sand', 'silt', 'clay').
+        output_dir: The directory where the downloaded files will be saved.
+        concurrency_limit: The maximum number of concurrent downloads.
+
+    Returns:
+        A list of file paths for the downloaded data.
+    """
+    config = load_config()
+    urls = config.get("bnu_data", {}).get(f"{data_type}_urls", [])
+
+    if not urls:
+        logger.warning(f"No URLs found for data type: {data_type}")
+        return []
+
+    return await _download_files_concurrently(urls, output_dir, concurrency_limit)
+
+
 if __name__ == "__main__":
     # Configure basic logging to see the output when the script is run directly
     logging.basicConfig(
@@ -103,12 +114,12 @@ if __name__ == "__main__":
     async def main():
         logger.info("--- Downloading Sand Data ---")
         # Example with default concurrency limit
-        sand_files = await get_bnu_data("sand")
+        sand_files = await bnu_downloader("sand")
         logger.info(f"Downloaded sand files: {sand_files}")
 
         logger.info("\n--- Downloading Silt Data (with a limit of 5) ---")
         # Example with a custom concurrency limit
-        silt_files = await get_bnu_data("silt", concurrency_limit=5)
+        silt_files = await bnu_downloader("silt", concurrency_limit=5)
         logger.info(f"Downloaded silt files: {silt_files}")
 
     asyncio.run(main())
