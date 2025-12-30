@@ -64,7 +64,7 @@ class TestBnu(unittest.IsolatedAsyncioTestCase):
         MockClientSession.return_value = mock_session_context
 
         # Call the asynchronous function
-        downloaded_files = await bnu.get_bnu_data(
+        downloaded_files = await bnu.bnu_downloader(
             "sand", output_dir=str(self.output_dir)
         )
 
@@ -137,7 +137,7 @@ class TestBnu(unittest.IsolatedAsyncioTestCase):
         # 3. Run the Test
         # Start get_bnu_data but don't wait for it to complete yet.
         task = asyncio.create_task(
-            bnu.get_bnu_data(
+            bnu.bnu_downloader(
                 "sand",
                 output_dir=str(self.output_dir),
                 concurrency_limit=concurrency_limit,
