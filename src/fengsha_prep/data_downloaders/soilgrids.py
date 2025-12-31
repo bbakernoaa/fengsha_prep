@@ -1,6 +1,7 @@
 """
 This module provides functions to retrieve soil data from SoilGrids.
 """
+
 from pathlib import Path
 from typing import Union
 

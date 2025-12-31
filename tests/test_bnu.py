@@ -1,6 +1,7 @@
 """
 Tests for the bnu module.
 """
+
 import asyncio
 import shutil
 import unittest
@@ -77,7 +78,9 @@ class TestBnu(unittest.IsolatedAsyncioTestCase):
             self.output_dir / "sand2.nc",
         ]
         expected_files.sort(key=lambda p: p.name)
-        self.assertEqual([str(p) for p in downloaded_files], [str(p) for p in expected_files])
+        self.assertEqual(
+            [str(p) for p in downloaded_files], [str(p) for p in expected_files]
+        )
 
         # Check that both URLs were called
         self.assertEqual(mock_session.get.call_count, 2)
@@ -91,7 +94,6 @@ class TestBnu(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sand1_path.read_bytes(), b"test content")
         self.assertTrue(sand2_path.exists())
         self.assertEqual(sand2_path.read_bytes(), b"test content")
-
 
     @patch("fengsha_prep.data_downloaders.bnu.tomllib.load")
     @patch("fengsha_prep.data_downloaders.bnu._download_file")

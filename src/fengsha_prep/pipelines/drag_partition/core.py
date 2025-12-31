@@ -4,6 +4,7 @@ import earthaccess
 import numpy as np
 import xarray as xr
 
+
 def get_modis_data(product: str, start_date: str, end_date: str) -> xr.Dataset:
     """Retrieves MODIS CMG data from a NASA DAAC using earthaccess.
 
@@ -22,9 +23,7 @@ def get_modis_data(product: str, start_date: str, end_date: str) -> xr.Dataset:
         An xarray Dataset containing the downloaded and consolidated MODIS data.
     """
     results = earthaccess.search_data(
-        short_name=product,
-        cloud_hosted=True,
-        temporal=(start_date, end_date)
+        short_name=product, cloud_hosted=True, temporal=(start_date, end_date)
     )
     # Open the multi-file dataset using xarray
     ds = earthaccess.open_xr(results)
@@ -85,9 +84,9 @@ def _calculate_drag_partition(
     us_star = u10_wind * (ra_bare * f_veg)
     us_star.attrs["long_name"] = "Surface Friction Velocity"
     us_star.attrs["units"] = "m s-1"
-    us_star.attrs[
-        "history"
-    ] = f"Calculated at {np.datetime64('now')} using the hybrid drag partition model."
+    us_star.attrs["history"] = (
+        f"Calculated at {np.datetime64('now')} using the hybrid drag partition model."
+    )
 
     return us_star
 
@@ -145,11 +144,13 @@ if __name__ == "__main__":
     end_date_example = "2024-03-07"
     wind_speed_example = 7.5  # Constant wind speed in m/s
 
-    print(f"Running hybrid drag partition model for {start_date_example} to {end_date_example}...")
+    print(
+        f"Running hybrid drag partition model for {start_date_example} to {end_date_example}..."
+    )
     result_us_star = process_hybrid_drag(
         start_date=start_date_example,
         end_date=end_date_example,
-        u10_wind=wind_speed_example
+        u10_wind=wind_speed_example,
     )
     print("\n--- Processing Complete ---")
     print(result_us_star)

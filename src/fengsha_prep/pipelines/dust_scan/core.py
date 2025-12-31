@@ -15,12 +15,14 @@ from fengsha_prep.common import satellite
 
 # Default thresholds for dust detection, can be overridden.
 DEFAULT_THRESHOLDS: Dict[str, float] = {
-    'diff_12_10': -0.5,
-    'diff_10_8': 2.0,
-    'temp_10': 280
+    "diff_12_10": -0.5,
+    "diff_10_8": 2.0,
+    "temp_10": 280,
 }
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 
 async def _load_scene_from_s3(
@@ -39,7 +41,7 @@ async def _load_scene_from_s3(
         def _blocking_load():
             scn = Scene(reader=meta["reader"], filenames=[s3_path])
             scn.load(meta["bands"])
-            return scn.resample(resampler='native')
+            return scn.resample(resampler="native")
 
         return await asyncio.to_thread(_blocking_load)
 
@@ -56,15 +58,17 @@ def _load_scene_from_local(
 ) -> Optional[Scene]:
     """Loads a single satellite scene from the local filesystem."""
     try:
-        search_dir = data_dir if data_dir is not None else 'data'
-        files = glob.glob(f'{search_dir}/*{scn_time.strftime("%Y%j%H%M")}*.nc')
+        search_dir = data_dir if data_dir is not None else "data"
+        files = glob.glob(f"{search_dir}/*{scn_time.strftime('%Y%j%H%M')}*.*")
         if not files:
-            logging.debug(f"No local files found for {sat_id} at {scn_time} in {search_dir}")
+            logging.debug(
+                f"No local files found for {sat_id} at {scn_time} in {search_dir}"
+            )
             return None
 
         scn = Scene(filenames=files, reader=meta["reader"])
         scn.load(meta["bands"])
-        return scn.resample(resampler='native')
+        return scn.resample(resampler="native")
     except Exception as e:
         logging.error(f"Error loading local data for {scn_time}: {e}")
         return None
@@ -142,9 +146,9 @@ def detect_dust(scn: Scene, sat_id: str, thresholds: Dict[str, float]) -> xr.Dat
     diff_10_8 = b10 - b08
 
     dust_mask = (
-            (diff_12_10 < thresholds['diff_12_10']) &
-            (diff_10_8 > thresholds['diff_10_8']) &
-            (b10 > thresholds['temp_10'])
+        (diff_12_10 < thresholds["diff_12_10"])
+        & (diff_10_8 > thresholds["diff_10_8"])
+        & (b10 > thresholds["temp_10"])
     )
 
     # --- Add Provenance ---
@@ -152,12 +156,14 @@ def detect_dust(scn: Scene, sat_id: str, thresholds: Dict[str, float]) -> xr.Dat
         f"Dust mask generated at {datetime.datetime.now(datetime.UTC).isoformat()}Z. "
         f"Satellite: {sat_id}. Thresholds: {thresholds}."
     )
-    dust_mask.attrs['history'] = history_log
+    dust_mask.attrs["history"] = history_log
 
     return dust_mask
 
 
-def cluster_events(dust_mask: xr.DataArray, scn_time: datetime.datetime, sat_id: str) -> List[Dict[str, Any]]:
+def cluster_events(
+    dust_mask: xr.DataArray, scn_time: datetime.datetime, sat_id: str
+) -> List[Dict[str, Any]]:
     """Identifies distinct dust plumes from a dust mask using DBSCAN.
 
     This function takes a binary dust mask, extracts the coordinates of the
@@ -181,7 +187,7 @@ def cluster_events(dust_mask: xr.DataArray, scn_time: datetime.datetime, sat_id:
     """
     # Stack the spatial dimensions and drop non-dusty pixels to get a clean
     # list of coordinates. This is robust to non-contiguous dust plumes.
-    stacked_mask = dust_mask.stack(points=('y', 'x'))
+    stacked_mask = dust_mask.stack(points=("y", "x"))
     valid_pixels = stacked_mask.where(stacked_mask, drop=True)
 
     if valid_pixels.size == 0:
@@ -202,7 +208,7 @@ def cluster_events(dust_mask: xr.DataArray, scn_time: datetime.datetime, sat_id:
     eps_km: float = 20.0
     eps_rad: float = eps_km / earth_radius_km
 
-    db = DBSCAN(eps=eps_rad, min_samples=10, metric='haversine').fit(coords_rad)
+    db = DBSCAN(eps=eps_rad, min_samples=10, metric="haversine").fit(coords_rad)
     labels: np.ndarray = db.labels_
     unique_labels: set = set(labels)
 
@@ -211,25 +217,30 @@ def cluster_events(dust_mask: xr.DataArray, scn_time: datetime.datetime, sat_id:
         if k == -1:
             continue
 
-        class_member_mask: np.ndarray = (labels == k)
+        class_member_mask: np.ndarray = labels == k
         cluster_coords_deg: np.ndarray = coords_deg[class_member_mask]
 
         lat_mean: float = np.mean(cluster_coords_deg[:, 0])
         lon_mean: float = np.mean(cluster_coords_deg[:, 1])
         area_px: int = len(cluster_coords_deg)
 
-        events.append({
-            'datetime': scn_time,
-            'latitude': float(lat_mean),
-            'longitude': float(lon_mean),
-            'area_pixels': int(area_px),
-            'satellite': sat_id
-        })
+        events.append(
+            {
+                "datetime": scn_time,
+                "latitude": float(lat_mean),
+                "longitude": float(lon_mean),
+                "area_pixels": int(area_px),
+                "satellite": sat_id,
+            }
+        )
     return events
 
 
 def _process_scene_sync(
-    scn: Scene, scn_time: datetime.datetime, sat_id: str, thresholds: Dict[str, float]
+    scn: Scene,
+    scn_time: datetime.datetime,
+    sat_id: str,
+    thresholds: Dict[str, float],
 ) -> List[Dict[str, Any]]:
     """Synchronous (CPU-bound) part of the processing pipeline.
 
@@ -311,11 +322,15 @@ async def run_dust_scan_in_period(
     tasks: List[asyncio.Task] = []
     current_time = start_time
 
-    logging.info(f"Scanning {sat_id} from {start_time} to {end_time} with concurrency {concurrency_limit}...")
+    logging.info(
+        f"Scanning {sat_id} from {start_time} to {end_time} with concurrency {concurrency_limit}..."
+    )
 
     async def worker(scn_time: datetime.datetime):
         async with semaphore:
-            return await dust_scan_pipeline(scn_time, sat_id, thresholds, data_dir=data_dir)
+            return await dust_scan_pipeline(
+                scn_time, sat_id, thresholds, data_dir=data_dir
+            )
 
     while current_time <= end_time:
         tasks.append(asyncio.create_task(worker(current_time)))
@@ -330,53 +345,49 @@ async def run_dust_scan_in_period(
             logging.info(f"Found {len(events)} dust plumes at {events[0]['datetime']}.")
 
     if all_events:
-        df = pd.DataFrame(all_events).sort_values(by='datetime').reset_index(drop=True)
+        df = pd.DataFrame(all_events).sort_values(by="datetime").reset_index(drop=True)
         df.to_csv(output_csv, index=False)
         logging.info(f"✅ Success! Saved {len(df)} total events to {output_csv}")
     else:
         logging.info("No dust events detected in this period.")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Scan satellite data for dust events.")
     parser.add_argument(
-        '--sat',
-        type=str,
-        default='goes16',
-        help="Satellite ID (e.g., 'goes16')."
+        "--sat", type=str, default="goes16", help="Satellite ID (e.g., 'goes16')."
     )
     parser.add_argument(
-        '--start',
-        type=lambda s: datetime.datetime.strptime(s, '%Y-%m-%dT%H:%M'),
+        "--start",
+        type=lambda s: datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M"),
         required=True,
-        help="Start time in YYYY-MM-DDTHH:MM format."
+        help="Start time in YYYY-MM-DDTHH:MM format.",
     )
     parser.add_argument(
-        '--end',
-        type=lambda s: datetime.datetime.strptime(s, '%Y-%m-%dT%H:%M'),
+        "--end",
+        type=lambda s: datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M"),
         required=True,
-        help="End time in YYYY-MM-DDTHH:MM format."
+        help="End time in YYYY-MM-DDTHH:MM format.",
     )
     parser.add_argument(
-        '--output',
-        type=str,
-        default='dust_events.csv',
-        help="Output CSV file path."
+        "--output", type=str, default="dust_events.csv", help="Output CSV file path."
     )
     parser.add_argument(
-        '--data-dir',
+        "--data-dir",
         type=str,
         default=None,
-        help="Directory for local satellite data. Defaults to 'data'."
+        help="Directory for local satellite data. Defaults to 'data'.",
     )
     args = parser.parse_args()
 
-    asyncio.run(run_dust_scan_in_period(
-        start_time=args.start,
-        end_time=args.end,
-        sat_id=args.sat,
-        output_csv=args.output,
-        data_dir=args.data_dir
-    ))
+    asyncio.run(
+        run_dust_scan_in_period(
+            start_time=args.start,
+            end_time=args.end,
+            sat_id=args.sat,
+            output_csv=args.output,
+            data_dir=args.data_dir,
+        )
+    )

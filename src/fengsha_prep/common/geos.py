@@ -1,9 +1,11 @@
 """
 This module provides functions for regridding data.
 """
+
 import xarray as xr
 import xesmf as xe
 import numpy as np
+
 
 def regrid_modis_to_rectilinear(
     ds: xr.Dataset,
@@ -14,7 +16,7 @@ def regrid_modis_to_rectilinear(
     lat_min: float,
     lat_max: float,
     d_lat: float,
-    method: str = 'bilinear'
+    method: str = "bilinear",
 ) -> xr.DataArray:
     """
     Regrids a dataset from a MODIS sinusoidal grid to a rectilinear grid.
@@ -39,10 +41,12 @@ def regrid_modis_to_rectilinear(
     lon_out = np.arange(lon_min, lon_max + d_lon, d_lon)
     lat_out = np.arange(lat_min, lat_max + d_lat, d_lat)
 
-    ds_out = xr.Dataset({
-        'lat': (('lat',), lat_out),
-        'lon': (('lon',), lon_out),
-    })
+    ds_out = xr.Dataset(
+        {
+            "lat": (("lat",), lat_out),
+            "lon": (("lon",), lon_out),
+        }
+    )
 
     # Create the regridder
     regridder = xe.Regridder(ds, ds_out, method)

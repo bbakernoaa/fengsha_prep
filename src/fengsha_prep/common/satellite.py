@@ -1,6 +1,7 @@
 """
 Utilities for handling satellite data.
 """
+
 import datetime
 import s3fs
 from typing import Dict, Any
@@ -28,16 +29,22 @@ SATELLITE_METADATA: Dict[str, Dict[str, Any]] = {
         "is_s3": True,
     },
     "himawari": {
-        "bands": ['B11', 'B13', 'B15'],
+        "bands": ["B11", "B13", "B15"],
         "reader": "ahi_hsd",
         "is_s3": False,
     },
     "seviri": {
-        "bands": ['IR_87', 'IR_108', 'IR_120'],
+        "bands": ["IR_87", "IR_108", "IR_120"],
         "reader": "seviri_l1b_native",
         "is_s3": False,
     },
+    "modis": {
+        "bands": ["29", "31", "32"],
+        "reader": "modis_l1b",
+        "is_s3": False,
+    },
 }
+
 
 def get_satellite_metadata(sat_id: str) -> Dict[str, Any]:
     """
@@ -59,11 +66,14 @@ def get_satellite_metadata(sat_id: str) -> Dict[str, Any]:
     """
     if sat_id in SATELLITE_METADATA:
         return SATELLITE_METADATA[sat_id]
-    if 'himawari' in sat_id:
-        return SATELLITE_METADATA['himawari']
-    if 'seviri' in sat_id:
-        return SATELLITE_METADATA['seviri']
+    if "himawari" in sat_id:
+        return SATELLITE_METADATA["himawari"]
+    if "seviri" in sat_id:
+        return SATELLITE_METADATA["seviri"]
+    if "modis" in sat_id:
+        return SATELLITE_METADATA["modis"]
     return {}
+
 
 # Initialize the S3 file system object
 fs = s3fs.S3FileSystem(anon=True)
@@ -71,10 +81,10 @@ fs = s3fs.S3FileSystem(anon=True)
 
 def _parse_s3_timestamp(filename: str) -> datetime.datetime:
     """Extracts the timestamp from a GOES satellite data filename."""
-    parts = filename.split('_')
+    parts = filename.split("_")
     # Extract the 'sYYYYJJJHHMMSSd' part, where 'd' is tenths of a second
     timestamp_str = parts[3][1:-1]
-    return datetime.datetime.strptime(timestamp_str, '%Y%j%H%M%S')
+    return datetime.datetime.strptime(timestamp_str, "%Y%j%H%M%S")
 
 
 def get_s3_path(sat_id: str, scn_time: datetime.datetime) -> str:
@@ -120,9 +130,6 @@ def get_s3_path(sat_id: str, scn_time: datetime.datetime) -> str:
         raise FileNotFoundError(f"No files found for {sat_id} around {scn_time}")
 
     # Find the file with the timestamp closest to scn_time
-    closest_file = min(
-        all_files,
-        key=lambda f: abs(_parse_s3_timestamp(f) - scn_time)
-    )
+    closest_file = min(all_files, key=lambda f: abs(_parse_s3_timestamp(f) - scn_time))
 
     return f"s3://{closest_file}"
