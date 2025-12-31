@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from src.fengsha_prep.data_downloaders.bnu import (
+from fengsha_prep.data_downloaders.bnu import (
     _download_files_concurrently,
     bnu_downloader,
 )
@@ -82,11 +82,11 @@ async def test_bnu_downloader_loads_config_and_calls_downloader():
 
     # Mock the configuration loader and the downloader
     with patch(
-        "src.fengsha_prep.data_downloaders.bnu.load_config",
+        "fengsha_prep.data_downloaders.bnu.load_config",
         return_value=mock_config,
     ) as mock_load_config:
         with patch(
-            "src.fengsha_prep.data_downloaders.bnu._download_files_concurrently",
+            "fengsha_prep.data_downloaders.bnu._download_files_concurrently",
             new_callable=AsyncMock,
         ) as mock_downloader:
             # Act
