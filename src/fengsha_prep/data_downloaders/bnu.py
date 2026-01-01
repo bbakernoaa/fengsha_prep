@@ -84,7 +84,7 @@ async def _download_files_concurrently(
     return successful_downloads
 
 
-async def get_bnu_data(
+async def get_bnu_data_async(
     data_type: str,
     output_dir: str = "bnu_data",
     concurrency_limit: int = 10,
@@ -118,6 +118,35 @@ async def get_bnu_data(
     )
 
 
+def get_bnu_data(
+    data_type: str,
+    output_dir: str = "bnu_data",
+    concurrency_limit: int = 10,
+) -> List[Path]:
+    """
+    Retrieves soil data from the BNU soil dataset by downloading it
+    concurrently from URLs specified in the configuration file.
+
+    This is a synchronous wrapper around the asynchronous `get_bnu_data_async`
+    function.
+
+    Args:
+        data_type: The type of data to retrieve (e.g., 'sand', 'silt', 'clay').
+        output_dir: The directory where the downloaded files will be saved.
+        concurrency_limit: The maximum number of concurrent downloads.
+
+    Returns:
+        A list of file paths for the downloaded data.
+    """
+    return asyncio.run(
+        get_bnu_data_async(
+            data_type=data_type,
+            output_dir=output_dir,
+            concurrency_limit=concurrency_limit,
+        )
+    )
+
+
 if __name__ == "__main__":
     # Configure basic logging to see the output when the script is run directly
     logging.basicConfig(
@@ -125,16 +154,13 @@ if __name__ == "__main__":
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
-    # Example of how to run the asynchronous function
-    async def main():
-        logger.info("--- Downloading Sand Data ---")
-        # Example with default concurrency limit
-        sand_files = await get_bnu_data("sand")
-        logger.info(f"Downloaded sand files: {sand_files}")
+    # Example of how to run the synchronous function
+    logger.info("--- Downloading Sand Data ---")
+    # Example with default concurrency limit
+    sand_files = get_bnu_data("sand")
+    logger.info(f"Downloaded sand files: {sand_files}")
 
-        logger.info("\n--- Downloading Silt Data (with a limit of 5) ---")
-        # Example with a custom concurrency limit
-        silt_files = await get_bnu_data("silt", concurrency_limit=5)
-        logger.info(f"Downloaded silt files: {silt_files}")
-
-    asyncio.run(main())
+    logger.info("\n--- Downloading Silt Data (with a limit of 5) ---")
+    # Example with a custom concurrency limit
+    silt_files = get_bnu_data("silt", concurrency_limit=5)
+    logger.info(f"Downloaded silt files: {silt_files}")

@@ -4,7 +4,33 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fengsha_prep.data_downloaders.bnu import _download_files_concurrently
+from fengsha_prep.data_downloaders.bnu import _download_files_concurrently, get_bnu_data
+
+
+def test_get_bnu_data_sync_wrapper(tmp_path: Path):
+    """
+    Verify that the synchronous `get_bnu_data` wrapper correctly calls the
+    asynchronous implementation and returns its result.
+    """
+    # Arrange
+    data_type = "sand"
+    output_dir = tmp_path / "bnu_data"
+    expected_result = [output_dir / "file1.nc", output_dir / "file2.nc"]
+
+    # Mock the async function that the sync wrapper calls
+    with patch(
+        "fengsha_prep.data_downloaders.bnu.get_bnu_data_async",
+        new_callable=AsyncMock,
+        return_value=expected_result,
+    ) as mock_async_func:
+        # Act
+        result = get_bnu_data(data_type, str(output_dir))
+
+        # Assert
+        assert result == expected_result
+        mock_async_func.assert_awaited_once_with(
+            data_type=data_type, output_dir=str(output_dir), concurrency_limit=10
+        )
 
 
 @pytest.mark.asyncio
