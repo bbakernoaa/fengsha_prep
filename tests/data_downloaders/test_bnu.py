@@ -1,4 +1,5 @@
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -76,7 +77,6 @@ async def test_download_files_concurrently_partial_failure(tmp_path: Path):
     assert not (output_dir / "failure.txt").exists()
 
 
-import asyncio
 
 
 @pytest.mark.asyncio
