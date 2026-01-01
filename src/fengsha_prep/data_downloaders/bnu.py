@@ -44,6 +44,46 @@ async def _download_file(
         return None
 
 
+async def _download_files_concurrently(
+    urls: List[str], output_dir: Path, concurrency_limit: int
+) -> List[Path]:
+    """
+    Asynchronously downloads a list of files concurrently.
+
+    This is the core, testable download logic, decoupled from configuration.
+
+    Args:
+        urls: A list of URLs to download.
+        output_dir: The directory where the downloaded files will be saved.
+        concurrency_limit: The maximum number of concurrent downloads.
+
+    Returns:
+        A list of file paths for the downloaded data.
+    """
+    if not urls:
+        return []
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    semaphore = asyncio.Semaphore(concurrency_limit)
+    tasks = []
+
+    async def worker(session: aiohttp.ClientSession, url: str, filepath: Path):
+        """Acquires semaphore and runs the download task."""
+        async with semaphore:
+            return await _download_file(session, url, filepath)
+
+    async with aiohttp.ClientSession() as session:
+        for url in urls:
+            filename = url.split("/")[-1]
+            filepath = output_dir / filename
+            task = asyncio.create_task(worker(session, url, filepath))
+            tasks.append(task)
+
+        results = await asyncio.gather(*tasks)
+    successful_downloads = [res for res in results if res is not None]
+    return successful_downloads
+
+
 async def get_bnu_data(
     data_type: str,
     output_dir: str = "bnu_data",
@@ -52,6 +92,9 @@ async def get_bnu_data(
     """
     Asynchronously retrieves soil data from the BNU soil dataset by downloading
     it concurrently from URLs specified in the configuration file.
+
+    This function acts as a configuration-aware wrapper around the core
+    download logic.
 
     Args:
         data_type: The type of data to retrieve (e.g., 'sand', 'silt', 'clay').
@@ -68,28 +111,11 @@ async def get_bnu_data(
         logger.warning(f"No URLs found for data type: {data_type}")
         return []
 
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    semaphore = asyncio.Semaphore(concurrency_limit)
-    tasks = []
-
-    async def worker(session: aiohttp.ClientSession, url: str, filepath: Path):
-        """Acquires semaphore and runs the download task."""
-        async with semaphore:
-            return await _download_file(session, url, filepath)
-
-    async with aiohttp.ClientSession() as session:
-        for url in urls:
-            filename = url.split("/")[-1]
-            filepath = output_path / filename
-            task = asyncio.create_task(worker(session, url, filepath))
-            tasks.append(task)
-
-        results = await asyncio.gather(*tasks)
-    successful_downloads = [res for res in results if res is not None]
-
-    return successful_downloads
+    return await _download_files_concurrently(
+        urls=urls,
+        output_dir=Path(output_dir),
+        concurrency_limit=concurrency_limit,
+    )
 
 
 if __name__ == "__main__":

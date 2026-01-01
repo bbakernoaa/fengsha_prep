@@ -1,8 +1,12 @@
+import logging
 from typing import Union
 
 import earthaccess
 import numpy as np
 import xarray as xr
+
+# Set up a logger for the module
+logger = logging.getLogger(__name__)
 
 
 def get_modis_data(product: str, start_date: str, end_date: str) -> xr.Dataset:
@@ -122,16 +126,23 @@ def process_hybrid_drag(
     - Hennen et al. (2023): DOI 10.1016/j.aeolia.2022.100852
     - Guerschman et al. (2009): DOI 10.1016/j.rse.2009.01.006
     """
-    print("Fetching MODIS Albedo (MCD43C3)...")
+    logger.info("Fetching MODIS Albedo (MCD43C3)...")
     ds_alb = get_modis_data("MCD43C3", start_date, end_date)
 
-    print("Fetching MODIS LAI (MCD15A2H)...")
+    logger.info("Fetching MODIS LAI (MCD15A2H)...")
     ds_lai = get_modis_data("MCD15A2H", start_date, end_date)
 
     return _calculate_drag_partition(ds_alb, ds_lai, u10_wind)
 
 
 if __name__ == "__main__":
+    # --- LOGGING CONFIGURATION ---
+    # Configure basic logging to see the output when the script is run directly
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+    )
+
     # --- AUTHENTICATION ---
     # This will prompt for your Earthdata credentials if not found in environment variables
     # For non-interactive environments, it's recommended to have credentials in a .netrc file.
@@ -144,7 +155,7 @@ if __name__ == "__main__":
     end_date_example = "2024-03-07"
     wind_speed_example = 7.5  # Constant wind speed in m/s
 
-    print(
+    logger.info(
         f"Running hybrid drag partition model for {start_date_example} to {end_date_example}..."
     )
     result_us_star = process_hybrid_drag(
@@ -152,9 +163,9 @@ if __name__ == "__main__":
         end_date=end_date_example,
         u10_wind=wind_speed_example,
     )
-    print("\n--- Processing Complete ---")
-    print(result_us_star)
+    logger.info("\n--- Processing Complete ---")
+    logger.info(result_us_star)
 
     # Example of how to save the output to a NetCDF file
     # result_us_star.to_netcdf("surface_friction_velocity.nc")
-    # print("\nResult saved to surface_friction_velocity.nc")
+    # logger.info("\nResult saved to surface_friction_velocity.nc")
