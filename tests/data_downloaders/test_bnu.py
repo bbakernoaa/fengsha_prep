@@ -102,6 +102,48 @@ async def test_get_bnu_data_async_success(
     assert result == expected_paths
 
 
+@patch(
+    "fengsha_prep.data_downloaders.bnu._download_files_concurrently",
+    new_callable=AsyncMock,
+)
+def test_get_bnu_data_with_custom_config(
+    mock_download_concurrently: AsyncMock, tmp_path: Path
+):
+    """
+    Verify `get_bnu_data` can load a user-specified TOML config file.
+    """
+    # Arrange
+    data_type = "custom_sand"
+    output_dir = tmp_path / "bnu_output"
+    custom_urls = ["http://custom.example.com/sand1.nc"]
+
+    # Create a temporary, custom config file
+    custom_config_content = f"""
+    [bnu_data]
+    {data_type}_urls = {custom_urls}
+    """
+    custom_config_path = tmp_path / "custom_config.toml"
+    custom_config_path.write_text(custom_config_content)
+
+    expected_paths = [output_dir / url.split("/")[-1] for url in custom_urls]
+    mock_download_concurrently.return_value = expected_paths
+
+    # Act: Call the function with the path to the custom config
+    result = get_bnu_data(
+        data_type,
+        output_dir=str(output_dir),
+        config_path=custom_config_path,
+    )
+
+    # Assert: Verify the download function was called with URLs from the *custom* config
+    mock_download_concurrently.assert_awaited_once_with(
+        urls=custom_urls,
+        output_dir=Path(output_dir),
+        concurrency_limit=10,
+    )
+    assert result == expected_paths
+
+
 @pytest.mark.asyncio
 async def test_download_files_concurrently_success(tmp_path: Path):
     """

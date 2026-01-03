@@ -13,13 +13,15 @@ import aiohttp
 # Set up a logger for the module
 logger = logging.getLogger(__name__)
 
-# Use pathlib for more robust path handling
-CONFIG_PATH = Path(__file__).parent / "config.toml"
-
-
-def load_config() -> Dict[str, Any]:
-    """Loads the configuration from the config.toml file."""
-    with open(CONFIG_PATH, "rb") as f:
+def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
+    """
+    Loads the configuration from a TOML file.
+    If a path is provided, it's used. Otherwise, it defaults to the
+    internal config.toml file.
+    """
+    if config_path is None:
+        config_path = Path(__file__).parent / "config.toml"
+    with open(config_path, "rb") as f:
         return tomllib.load(f)
 
 
@@ -88,6 +90,7 @@ async def get_bnu_data_async(
     data_type: str,
     output_dir: str = "bnu_data",
     concurrency_limit: int = 10,
+    config_path: Optional[Path] = None,
 ) -> List[Path]:
     """
     Asynchronously retrieves soil data from the BNU soil dataset by downloading
@@ -100,11 +103,12 @@ async def get_bnu_data_async(
         data_type: The type of data to retrieve (e.g., 'sand', 'silt', 'clay').
         output_dir: The directory where the downloaded files will be saved.
         concurrency_limit: The maximum number of concurrent downloads.
+        config_path: Optional path to a custom configuration file.
 
     Returns:
         A list of file paths for the downloaded data.
     """
-    config = load_config()
+    config = load_config(config_path)
     urls = config.get("bnu_data", {}).get(f"{data_type}_urls", [])
 
     if not urls:
@@ -122,6 +126,7 @@ def get_bnu_data(
     data_type: str,
     output_dir: str = "bnu_data",
     concurrency_limit: int = 10,
+    config_path: Optional[Path] = None,
 ) -> List[Path]:
     """
     Retrieves soil data from the BNU soil dataset by downloading it
@@ -134,12 +139,13 @@ def get_bnu_data(
         data_type: The type of data to retrieve (e.g., 'sand', 'silt', 'clay').
         output_dir: The directory where the downloaded files will be saved.
         concurrency_limit: The maximum number of concurrent downloads.
+        config_path: Optional path to a custom configuration file.
 
     Returns:
         A list of file paths for the downloaded data.
     """
     return asyncio.run(
-        get_bnu_data_async(data_type, output_dir, concurrency_limit)
+        get_bnu_data_async(data_type, output_dir, concurrency_limit, config_path)
     )
 
 
