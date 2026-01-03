@@ -1,10 +1,105 @@
-
 import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fengsha_prep.data_downloaders.bnu import _download_files_concurrently
+from fengsha_prep.data_downloaders.bnu import (
+    _download_files_concurrently,
+    get_bnu_data,
+    get_bnu_data_async,
+)
+
+
+@patch("fengsha_prep.data_downloaders.bnu.load_config")
+@patch(
+    "fengsha_prep.data_downloaders.bnu._download_files_concurrently",
+    new_callable=AsyncMock,
+)
+def test_get_bnu_data_success(
+    mock_download_concurrently: AsyncMock, mock_load_config, tmp_path: Path
+):
+    """
+    Verify `get_bnu_data` (sync) calls download logic with correct params.
+    """
+    # Arrange
+    data_type = "sand"
+    output_dir = tmp_path / "bnu_output"
+    mock_urls = ["http://example.com/sand1.nc", "http://example.com/sand2.nc"]
+    mock_load_config.return_value = {"bnu_data": {f"{data_type}_urls": mock_urls}}
+    expected_paths = [output_dir / url.split("/")[-1] for url in mock_urls]
+    mock_download_concurrently.return_value = expected_paths
+
+    # Act
+    result = get_bnu_data(data_type, output_dir=str(output_dir))
+
+    # Assert
+    mock_load_config.assert_called_once()
+    # The sync wrapper calls the async function, which calls the downloader.
+    # So we check if the downloader was awaited.
+    mock_download_concurrently.assert_awaited_once_with(
+        urls=mock_urls,
+        output_dir=Path(output_dir),
+        concurrency_limit=10,  # Default value
+    )
+    assert result == expected_paths
+
+
+@patch("fengsha_prep.data_downloaders.bnu.load_config")
+@patch(
+    "fengsha_prep.data_downloaders.bnu._download_files_concurrently",
+    new_callable=AsyncMock,
+)
+def test_get_bnu_data_no_urls(
+    mock_download_concurrently: AsyncMock, mock_load_config
+):
+    """
+    Verify `get_bnu_data` (sync) returns empty list if no URLs are found.
+    """
+    # Arrange
+    data_type = "unobtanium"
+    # Return a config that is valid but doesn't contain the requested data_type
+    mock_load_config.return_value = {"bnu_data": {"sand_urls": ["some_url"]}}
+
+    # Act
+    result = get_bnu_data(data_type)
+
+    # Assert
+    mock_load_config.assert_called_once()
+    mock_download_concurrently.assert_not_awaited()
+    assert result == []
+
+
+@pytest.mark.asyncio
+@patch("fengsha_prep.data_downloaders.bnu.load_config")
+@patch(
+    "fengsha_prep.data_downloaders.bnu._download_files_concurrently",
+    new_callable=AsyncMock,
+)
+async def test_get_bnu_data_async_success(
+    mock_download_concurrently: AsyncMock, mock_load_config, tmp_path: Path
+):
+    """
+    Verify `get_bnu_data_async` calls download logic with correct params.
+    """
+    # Arrange
+    data_type = "silt"
+    output_dir = tmp_path / "bnu_output_async"
+    mock_urls = ["http://example.com/silt1.nc"]
+    mock_load_config.return_value = {"bnu_data": {f"{data_type}_urls": mock_urls}}
+    expected_paths = [output_dir / url.split("/")[-1] for url in mock_urls]
+    mock_download_concurrently.return_value = expected_paths
+
+    # Act
+    result = await get_bnu_data_async(data_type, output_dir=str(output_dir))
+
+    # Assert
+    mock_load_config.assert_called_once()
+    mock_download_concurrently.assert_awaited_once_with(
+        urls=mock_urls,
+        output_dir=Path(output_dir),
+        concurrency_limit=10,
+    )
+    assert result == expected_paths
 
 
 @pytest.mark.asyncio
