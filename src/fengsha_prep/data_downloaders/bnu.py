@@ -149,20 +149,3 @@ def get_bnu_data(
     )
 
 
-if __name__ == "__main__":
-    # Configure basic logging to see the output when the script is run directly
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-    )
-
-    # Example of how to run the synchronous function
-    logger.info("--- Downloading Sand Data ---")
-    # Example with default concurrency limit
-    sand_files = get_bnu_data("sand")
-    logger.info(f"Downloaded sand files: {sand_files}")
-
-    logger.info("\n--- Downloading Silt Data (with a limit of 5) ---")
-    # Example with a custom concurrency limit
-    silt_files = get_bnu_data("silt", concurrency_limit=5)
-    logger.info(f"Downloaded silt files: {silt_files}")
