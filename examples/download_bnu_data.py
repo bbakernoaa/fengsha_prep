@@ -9,7 +9,7 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.fengsha_prep.data_downloaders.bnu import get_bnu_data
+from src.fengsha_prep.data_downloaders.bnu import get_bnu_data  # noqa: E402
 
 # Configure basic logging to see the output from the downloader and this script
 logging.basicConfig(
