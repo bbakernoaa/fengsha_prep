@@ -2,9 +2,11 @@
 Utilities for handling satellite data.
 """
 
+import asyncio
 import datetime
-import s3fs
 from typing import Dict, Any
+
+import s3fs
 
 SATELLITE_METADATA: Dict[str, Dict[str, Any]] = {
     "goes16": {
@@ -75,27 +77,25 @@ def get_satellite_metadata(sat_id: str) -> Dict[str, Any]:
     return {}
 
 
-# Initialize the S3 file system object
-fs = s3fs.S3FileSystem(anon=True)
-
-
 def _parse_s3_timestamp(filename: str) -> datetime.datetime:
     """Extracts the timestamp from a GOES satellite data filename."""
     parts = filename.split("_")
-    # Extract the 'sYYYYJJJHHMMSSd' part, where 'd' is tenths of a second
     timestamp_str = parts[3][1:-1]
     return datetime.datetime.strptime(timestamp_str, "%Y%j%H%M%S")
 
 
-def get_s3_path(sat_id: str, scn_time: datetime.datetime) -> str:
+async def get_s3_path(
+    s3: s3fs.S3FileSystem, sat_id: str, scn_time: datetime.datetime
+) -> str:
     """
-    Finds the S3 path for the GOES file closest to a given timestamp.
+    Asynchronously finds the S3 path for the GOES file closest to a given timestamp.
 
     This function searches the S3 directory for the given hour, as well as the
-    preceding and succeeding hours, to ensure the chronologically closest file
-    is found, especially for timestamps near the edge of an hour.
+    preceding and succeeding hours concurrently, to ensure the chronologically
+    closest file is found.
 
     Args:
+        s3: An asynchronous S3FileSystem instance.
         sat_id: The identifier of the satellite (e.g., 'goes16').
         scn_time: The target timestamp.
 
@@ -110,26 +110,28 @@ def get_s3_path(sat_id: str, scn_time: datetime.datetime) -> str:
     if not config or "bucket" not in config:
         raise ValueError(f"Unsupported S3 satellite: {sat_id}")
 
-    all_files = []
-    for hour_offset in [-1, 0, 1]:
+    async def _list_dir(hour_offset: int):
         search_time = scn_time + datetime.timedelta(hours=hour_offset)
         bucket = config["bucket"]
         product = config["product"]
-        year = search_time.strftime("%Y")
-        day_of_year = search_time.strftime("%j")
-        hour = search_time.strftime("%H")
-
-        s3_dir = f"s3://{bucket}/{product}/{year}/{day_of_year}/{hour}/"
-
+        s3_dir = (
+            f"s3://{bucket}/{product}/{search_time.strftime('%Y/%j/%H')}/"
+        )
         try:
-            all_files.extend(fs.ls(s3_dir))
+            return await s3.ls(s3_dir)
         except FileNotFoundError:
-            continue
+            return []
+
+    # Concurrently search the target hour, the one before, and the one after.
+    search_tasks = [_list_dir(offset) for offset in [-1, 0, 1]]
+    dir_contents = await asyncio.gather(*search_tasks)
+    all_files = [item for sublist in dir_contents for item in sublist]
 
     if not all_files:
         raise FileNotFoundError(f"No files found for {sat_id} around {scn_time}")
 
-    # Find the file with the timestamp closest to scn_time
-    closest_file = min(all_files, key=lambda f: abs(_parse_s3_timestamp(f) - scn_time))
+    closest_file = min(
+        all_files, key=lambda f: abs(_parse_s3_timestamp(f) - scn_time)
+    )
 
     return f"s3://{closest_file}"

@@ -29,9 +29,9 @@ async def _load_scene_from_s3(
     scn_time: datetime.datetime, sat_id: str, meta: Dict[str, Any]
 ) -> Optional[Scene]:
     """Asynchronously loads a single satellite scene from an AWS S3 bucket."""
-    s3 = s3fs.S3FileSystem(asynchronous=True)
+    s3 = s3fs.S3FileSystem(asynchronous=True, anon=True)
     try:
-        s3_path = satellite.get_s3_path(sat_id, scn_time)
+        s3_path = await satellite.get_s3_path(s3, sat_id, scn_time)
         if not await s3.exists(s3_path):
             logging.debug(f"No S3 file found for {sat_id} at {scn_time}")
             return None
@@ -185,16 +185,17 @@ def cluster_events(
         A list of dictionaries, where each dictionary represents a detected
         dust event with its properties (centroid, area, etc.).
     """
-    # Stack the spatial dimensions and drop non-dusty pixels to get a clean
-    # list of coordinates. This is robust to non-contiguous dust plumes.
-    stacked_mask = dust_mask.stack(points=("y", "x"))
-    valid_pixels = stacked_mask.where(stacked_mask, drop=True)
+    # More memory-efficient way to get dusty pixel coordinates, avoiding
+    # the creation of large intermediate xarray objects.
+    y_indices, x_indices = np.where(dust_mask.values)
 
-    if valid_pixels.size == 0:
+    if y_indices.size == 0:
         return []
 
-    lats = valid_pixels.lat.values
-    lons = valid_pixels.lon.values
+    # Extract the lat/lon coordinates for the dusty pixels directly.
+    # Assumes 'lat' and 'lon' are 2D coordinates in the DataArray.
+    lats = dust_mask.lat.values[y_indices, x_indices]
+    lons = dust_mask.lon.values[y_indices, x_indices]
     coords_deg = np.column_stack((lats, lons))
 
     # For accurate geographic clustering, we use the haversine metric, which
