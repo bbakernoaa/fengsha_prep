@@ -273,7 +273,7 @@ async def test_load_scene_from_s3_async_success(
     # --- Setup ---
     mock_s3_instance = mock_s3fs.return_value
     mock_s3_instance.exists = AsyncMock(return_value=True)
-    mock_satellite.get_s3_path.return_value = "s3://bucket/file.nc"
+    mock_satellite.get_s3_path = AsyncMock(return_value="s3://bucket/file.nc")
 
     mock_scene = MagicMock(spec=Scene)
     mock_to_thread.return_value = mock_scene
@@ -285,7 +285,7 @@ async def test_load_scene_from_s3_async_success(
 
     # --- Verification ---
     assert scn is mock_scene
-    mock_s3fs.assert_called_once_with(asynchronous=True)
+    mock_s3fs.assert_called_once_with(asynchronous=True, anon=True)
     mock_s3_instance.exists.assert_awaited_once_with("s3://bucket/file.nc")
     mock_to_thread.assert_awaited_once()
 
