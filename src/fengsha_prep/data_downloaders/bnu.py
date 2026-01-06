@@ -7,11 +7,13 @@ import logging
 import tomllib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import aiohttp
 
 # Set up a logger for the module
 logger = logging.getLogger(__name__)
+
 
 def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
     """
@@ -46,6 +48,17 @@ async def _download_file(
         return None
 
 
+async def _download_file_with_semaphore(
+    session: aiohttp.ClientSession,
+    url: str,
+    filepath: Path,
+    semaphore: asyncio.Semaphore,
+) -> Optional[Path]:
+    """Acquires a semaphore, then downloads a single file."""
+    async with semaphore:
+        return await _download_file(session, url, filepath)
+
+
 async def _download_files_concurrently(
     urls: List[str], output_dir: Path, concurrency_limit: int
 ) -> List[Path]:
@@ -69,16 +82,17 @@ async def _download_files_concurrently(
     semaphore = asyncio.Semaphore(concurrency_limit)
     tasks = []
 
-    async def worker(session: aiohttp.ClientSession, url: str, filepath: Path):
-        """Acquires semaphore and runs the download task."""
-        async with semaphore:
-            return await _download_file(session, url, filepath)
-
     async with aiohttp.ClientSession() as session:
         for url in urls:
-            filename = url.split("/")[-1]
+            # Safely parse the URL to extract the path, then get the filename
+            filename = Path(urlparse(url).path).name
+            if not filename:
+                logger.warning(f"Could not determine filename from URL: {url}")
+                continue
             filepath = output_dir / filename
-            task = asyncio.create_task(worker(session, url, filepath))
+            task = asyncio.create_task(
+                _download_file_with_semaphore(session, url, filepath, semaphore)
+            )
             tasks.append(task)
 
         results = await asyncio.gather(*tasks)
@@ -147,5 +161,3 @@ def get_bnu_data(
     return asyncio.run(
         get_bnu_data_async(data_type, output_dir, concurrency_limit, config_path)
     )
-
-
