@@ -7,6 +7,7 @@ import logging
 import tomllib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -76,7 +77,7 @@ async def _download_files_concurrently(
 
     async with aiohttp.ClientSession() as session:
         for url in urls:
-            filename = url.split("/")[-1]
+            filename = Path(urlparse(url).path).name
             filepath = output_dir / filename
             task = asyncio.create_task(worker(session, url, filepath))
             tasks.append(task)
