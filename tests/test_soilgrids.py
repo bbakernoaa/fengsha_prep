@@ -4,8 +4,7 @@ Tests for the soilgrids module.
 
 import asyncio
 import unittest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import numpy as np
 import xarray as xr
