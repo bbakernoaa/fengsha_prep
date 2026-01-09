@@ -35,60 +35,39 @@ clay_urls = [
 
 ## Usage
 
-### SoilGrids
+### Drag Partition Pipeline
 
-To retrieve data from SoilGrids, use the `get_soilgrids_data` function. The data will be saved as a compressed NetCDF file.
+The `drag_partition` pipeline implements a hybrid model to estimate the surface friction velocity (us*) by partitioning drag between bare soil, green vegetation, and non-photosynthetic (brown) vegetation. It fetches the required MODIS Albedo (MCD43C3) and LAI (MCD15A2H) data from the NASA Earthdata repository.
+
+**Note on Authentication:** This pipeline uses the `earthaccess` library, which requires authentication with your NASA Earthdata login. For non-interactive environments, it is recommended to have your credentials stored in a `.netrc` file.
 
 ```python
-from fengsha_prep.soilgrids import get_soilgrids_data
+import earthaccess
+from fengsha_prep.pipelines.drag_partition.pipeline import run_drag_partition_pipeline
 
-data = get_soilgrids_data(
-    service_id='sand',
-    coverage_id='sand_0-5cm_mean',
-    west=-10,
-    south=-10,
-    east=10,
-    north=10,
-    crs='urn:ogc:def:crs:EPSG::4326',
-    output_path='sand_0-5cm_mean.nc'
+# Authenticate with Earthdata
+# This will prompt for credentials if not found in a .netrc file
+auth = earthaccess.login(strategy="interactive")
+
+# Define the analysis period and wind speed
+start_date = "2024-03-01"
+end_date = "2024-03-07"
+wind_speed = 7.5  # Constant wind speed in m/s
+
+# Run the pipeline
+result_us_star = run_drag_partition_pipeline(
+    start_date=start_date,
+    end_date=end_date,
+    u10_wind=wind_speed,
 )
+
+print(result_us_star)
+
+# The result can be saved to a NetCDF file
+# result_us_star.to_netcdf("surface_friction_velocity.nc")
 ```
 
-### BNU
-
-To retrieve data from the BNU soil dataset, use the `get_bnu_data` function. The `data_type` argument should correspond to an entry in the `config.toml` file (e.g., 'sand', 'silt', 'clay').
-
-```python
-from fengsha_prep.bnu import get_bnu_data
-
-downloaded_files = get_bnu_data('sand', output_dir='bnu_sand_data')
-```
-
-### Regridding
-
-To regrid a dataset from a MODIS sinusoidal grid to a rectilinear Gaussian grid, use the `regrid_modis_to_rectilinear` function.
-
-```python
-import xarray as xr
-import numpy as np
-from fengsha_prep.regrid import regrid_modis_to_rectilinear
-
-# Create a dummy sinusoidal dataset
-ds_sinu = xr.Dataset({
-    'foo': (('y', 'x'), np.random.rand(10, 20)),
-    'lat': (('y', 'x'), np.random.uniform(20, 50, size=(10, 20))),
-    'lon': (('y', 'x'), np.random.uniform(-120, -70, size=(10, 20))),
-})
-
-# Define the output grid
-lon_min, lon_max, d_lon = -110, -80, 1.0
-lat_min, lat_max, d_lat = 30, 45, 1.0
-
-# Regrid the dataset
-ds_regridded = regrid_modis_to_rectilinear(
-    ds_sinu, 'foo', lon_min, lon_max, d_lon, lat_min, lat_max, d_lat
-)
-```
+For a complete, runnable script, please see `examples/run_drag_partition_pipeline.py`.
 
 ## Contributing
 
