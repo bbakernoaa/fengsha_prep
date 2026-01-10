@@ -2,20 +2,21 @@
 Unit tests for the uthresh.py module.
 """
 
-import pytest
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pandas as pd
+import pytest
 import xarray as xr
-from unittest.mock import patch, MagicMock
 
 # Import the functions and classes to be tested from the package
 from fengsha_prep.pipelines.uthresh.core import (
     DustDataEngine,
     compute_hybrid_drag_partition,
     compute_moisture_inhibition,
+    generate_dust_flux_map,
     prepare_balanced_training,
     train_piml_model,
-    generate_dust_flux_map,
 )
 
 # --- Test Fixtures for Mock Data ---

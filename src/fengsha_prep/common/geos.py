@@ -2,9 +2,9 @@
 This module provides functions for regridding data.
 """
 
+import numpy as np
 import xarray as xr
 import xesmf as xe
-import numpy as np
 
 
 def regrid_modis_to_rectilinear(

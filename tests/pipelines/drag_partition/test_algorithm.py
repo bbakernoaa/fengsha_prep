@@ -18,7 +18,10 @@ def test_calculate_drag_partition_pure_logic():
         {
             "Albedo_BSW_Band1": (("y", "x"), np.full((2, 2), 0.15)),
             "BRDF_Albedo_Parameter_Isotropic_Band1": (("y", "x"), np.full((2, 2), 0.2)),
-            "Albedo_BSW_Band6": (("y", "x"), np.full((2, 2), 0.2)),  # Produces a moderate NDTI
+            "Albedo_BSW_Band6": (
+                ("y", "x"),
+                np.full((2, 2), 0.2),
+            ),  # Produces a moderate NDTI
             "Albedo_BSW_Band7": (("y", "x"), np.full((2, 2), 0.15)),
         },
         coords={"y": [1, 2], "x": [1, 2]},

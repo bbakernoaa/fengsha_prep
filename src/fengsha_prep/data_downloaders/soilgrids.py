@@ -1,9 +1,9 @@
 """
 This module provides functions to retrieve soil data from SoilGrids.
 """
+
 import asyncio
 from pathlib import Path
-from typing import Union
 
 import xarray as xr
 from soilgrids import SoilGrids
@@ -17,7 +17,7 @@ async def get_soilgrids_data_async(
     east: float,
     north: float,
     crs: str,
-    output_path: Union[str, Path],
+    output_path: str | Path,
 ) -> xr.DataArray:
     """
     Asynchronously retrieves soil data from SoilGrids for a given area and
@@ -69,7 +69,7 @@ def get_soilgrids_data(
     east: float,
     north: float,
     crs: str,
-    output_path: Union[str, Path],
+    output_path: str | Path,
 ) -> xr.DataArray:
     """
     Retrieves soil data from SoilGrids for a given area and saves it as a

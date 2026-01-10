@@ -4,11 +4,11 @@ Utilities for handling satellite data.
 
 import asyncio
 import datetime
-from typing import Dict, Any
+from typing import Any
 
 import s3fs
 
-SATELLITE_METADATA: Dict[str, Dict[str, Any]] = {
+SATELLITE_METADATA: dict[str, dict[str, Any]] = {
     "goes16": {
         "bucket": "noaa-goes16",
         "product": "ABI-L1b-RadC",
@@ -48,7 +48,7 @@ SATELLITE_METADATA: Dict[str, Dict[str, Any]] = {
 }
 
 
-def get_satellite_metadata(sat_id: str) -> Dict[str, Any]:
+def get_satellite_metadata(sat_id: str) -> dict[str, Any]:
     """
     Retrieves metadata for a given satellite ID.
 
@@ -114,9 +114,7 @@ async def get_s3_path(
         search_time = scn_time + datetime.timedelta(hours=hour_offset)
         bucket = config["bucket"]
         product = config["product"]
-        s3_dir = (
-            f"s3://{bucket}/{product}/{search_time.strftime('%Y/%j/%H')}/"
-        )
+        s3_dir = f"s3://{bucket}/{product}/{search_time.strftime('%Y/%j/%H')}/"
         try:
             return await s3.ls(s3_dir)
         except FileNotFoundError:
@@ -130,8 +128,6 @@ async def get_s3_path(
     if not all_files:
         raise FileNotFoundError(f"No files found for {sat_id} around {scn_time}")
 
-    closest_file = min(
-        all_files, key=lambda f: abs(_parse_s3_timestamp(f) - scn_time)
-    )
+    closest_file = min(all_files, key=lambda f: abs(_parse_s3_timestamp(f) - scn_time))
 
     return f"s3://{closest_file}"

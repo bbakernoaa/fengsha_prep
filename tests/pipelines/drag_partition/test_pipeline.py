@@ -32,7 +32,9 @@ def test_run_drag_partition_pipeline_integration():
     start_date = "2024-01-01"
     end_date = "2024-01-07"
     u10_wind = 10.0
-    run_drag_partition_pipeline(start_date, end_date, u10_wind, data_fetcher=mock_fetcher)
+    run_drag_partition_pipeline(
+        start_date, end_date, u10_wind, data_fetcher=mock_fetcher
+    )
 
     # Assert that the data_fetcher was called twice (once for Albedo, once for LAI)
     assert mock_fetcher.call_count == 2

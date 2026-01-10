@@ -11,19 +11,18 @@ References:
 
 import io
 from datetime import datetime
-from typing import Dict, Union
 
+import earthaccess
 import numpy as np
 import pandas as pd
-import xarray as xr
-import s3fs
-import earthaccess
 import rasterio
+import s3fs
+import xarray as xr
 from owslib.wcs import WebCoverageService
 from xgboost import XGBRegressor
 
 # --- CONFIGURATION & PARAMETERS ---
-IGBP_B_MAP: Dict[int, float] = {
+IGBP_B_MAP: dict[int, float] = {
     1: 0.04,
     2: 0.04,
     3: 0.04,
@@ -69,7 +68,8 @@ class DustDataEngine:
         Returns
         -------
         xarray.Dataset
-            A dataset containing the meteorological variables for the nearest grid point.
+            A dataset containing the meteorological variables for the nearest
+            grid point.
         """
         bucket = "noaa-ufs-gefsv13replay-pds"
         path = f"s3://{bucket}/{dt.strftime('%Y%m%d/%H')}/atmos/gefs.t{dt.strftime('%H')}z.pgrb2.0p25.f000"
@@ -81,7 +81,7 @@ class DustDataEngine:
             )
             return ds.sel(latitude=lat, longitude=lon, method="nearest")
 
-    def fetch_soilgrids(self, lat: float, lon: float) -> Dict[str, float]:
+    def fetch_soilgrids(self, lat: float, lon: float) -> dict[str, float]:
         """
         Fetch physical/chemical soil properties from ISRIC SoilGrids via WCS.
 
@@ -99,7 +99,7 @@ class DustDataEngine:
         """
         wcs = WebCoverageService(self.wcs_url, version="2.0.1")
         bbox = (lon - 0.005, lat - 0.005, lon + 0.005, lat + 0.005)
-        res: Dict[str, float] = {}
+        res: dict[str, float] = {}
         for var in ["clay", "sand", "soc", "bdod"]:
             layer = f"{var}_0-5cm_mean"
             resp = wcs.getCoverage(
@@ -119,7 +119,7 @@ class DustDataEngine:
 
 
 def compute_hybrid_drag_partition(
-    ds_alb: xr.Dataset, ds_lai: xr.Dataset, igbp_class: Union[int, xr.DataArray]
+    ds_alb: xr.Dataset, ds_lai: xr.Dataset, igbp_class: int | xr.DataArray
 ) -> xr.DataArray:
     """
     Calculates the roughness ratio R (us*/u*) using a hybrid model.
@@ -159,10 +159,10 @@ def compute_hybrid_drag_partition(
 
 
 def compute_moisture_inhibition(
-    moisture: Union[float, np.ndarray],
-    clay: Union[float, np.ndarray],
-    soc: Union[float, np.ndarray],
-) -> Union[float, np.ndarray]:
+    moisture: float | np.ndarray,
+    clay: float | np.ndarray,
+    soc: float | np.ndarray,
+) -> float | np.ndarray:
     """
     Calculates the moisture inhibition factor H(w).
 

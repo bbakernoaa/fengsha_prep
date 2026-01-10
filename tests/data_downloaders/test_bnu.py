@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
 from fengsha_prep.data_downloaders.bnu import (
     _download_files_concurrently,
     get_bnu_data,
@@ -49,9 +50,7 @@ def test_get_bnu_data_success(
     "fengsha_prep.data_downloaders.bnu._download_files_concurrently",
     new_callable=AsyncMock,
 )
-def test_get_bnu_data_no_urls(
-    mock_download_concurrently: AsyncMock, mock_load_config
-):
+def test_get_bnu_data_no_urls(mock_download_concurrently: AsyncMock, mock_load_config):
     """
     Verify `get_bnu_data` (sync) returns empty list if no URLs are found.
     """
@@ -157,10 +156,15 @@ async def test_download_files_concurrently_success(tmp_path: Path):
         "http://example.com/file3.txt",
     ]
     output_dir = tmp_path / "downloads"
-    expected_files = [output_dir / "file1.txt", output_dir / "file2.txt", output_dir / "file3.txt"]
+    expected_files = [
+        output_dir / "file1.txt",
+        output_dir / "file2.txt",
+        output_dir / "file3.txt",
+    ]
 
     # Act
-    # We patch the `_download_file` function to avoid actual downloads and to control the return value
+    # We patch the `_download_file` function to avoid actual downloads and to
+    # control the return value
     with patch(
         "fengsha_prep.data_downloaders.bnu._download_file", new_callable=AsyncMock
     ) as mock_download:
@@ -170,7 +174,9 @@ async def test_download_files_concurrently_success(tmp_path: Path):
             return filepath
 
         mock_download.side_effect = side_effect
-        result = await _download_files_concurrently(urls, output_dir, concurrency_limit=5)
+        result = await _download_files_concurrently(
+            urls, output_dir, concurrency_limit=5
+        )
 
     # Assert
     assert len(result) == len(urls)
@@ -205,15 +211,15 @@ async def test_download_files_concurrently_partial_failure(tmp_path: Path):
     with patch(
         "fengsha_prep.data_downloaders.bnu._download_file", new=selective_download
     ):
-        result = await _download_files_concurrently(urls, output_dir, concurrency_limit=5)
+        result = await _download_files_concurrently(
+            urls, output_dir, concurrency_limit=5
+        )
 
     # Assert
     assert len(result) == 2
     assert set(result) == set(successful_files)
     assert all(file.exists() for file in successful_files)
     assert not (output_dir / "failure.txt").exists()
-
-
 
 
 @pytest.mark.asyncio

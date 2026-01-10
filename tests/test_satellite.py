@@ -1,13 +1,16 @@
 import datetime
-import pytest
 from unittest.mock import AsyncMock
 
-from fengsha_prep.common.satellite import get_s3_path, _parse_s3_timestamp
+import pytest
+
+from fengsha_prep.common.satellite import _parse_s3_timestamp, get_s3_path
 
 
 def test_parse_s3_timestamp():
     """Test the timestamp parsing from a GOES S3 filename."""
-    filename = "OR_ABI-L1b-RadC-M6C13_G16_s20231001501172_e20231001503545_c20231001503598.nc"
+    filename = (
+        "OR_ABI-L1b-RadC-M6C13_G16_s20231001501172_e20231001503545_c20231001503598.nc"
+    )
     # Note: Day of year 100 is April 10th in a non-leap year (2023)
     expected_time = datetime.datetime(2023, 4, 10, 15, 1, 17)
     assert _parse_s3_timestamp(filename) == expected_time
@@ -27,9 +30,7 @@ async def test_get_s3_path_success():
     # The order is preserved by asyncio.gather.
     mock_s3.ls.side_effect = [[], mock_files, []]
 
-    scn_time = datetime.datetime(
-        2023, 10, 27, 15, 14, 0
-    )  # Closest to the 15:15 file
+    scn_time = datetime.datetime(2023, 10, 27, 15, 14, 0)  # Closest to the 15:15 file
     sat_id = "goes16"
     expected_path = "s3://" + mock_files[1]
 
@@ -47,8 +48,9 @@ async def test_get_s3_path_edge_of_hour():
     files_hour16 = [
         "noaa-goes16/ABI-L1b-RadC/2023/300/16/OR_ABI-L1b-RadC-M6C13_G16_s20233001600000_e...nc",
     ]
-    # Simulate finding files in hour 15 and 16. The function searches hour-1, hour, and hour+1
-    # relative to scn_time (15:59), so it will search hours 14, 15, and 16.
+    # Simulate finding files in hour 15 and 16. The function searches
+    # hour-1, hour, and hour+1 relative to scn_time (15:59), so it will
+    # search hours 14, 15, and 16.
     mock_s3.ls.side_effect = [[], files_hour15, files_hour16]
 
     scn_time = datetime.datetime(2023, 10, 27, 15, 59, 0)  # Closest to 16:00

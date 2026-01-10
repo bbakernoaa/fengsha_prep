@@ -3,15 +3,16 @@ Tests for the regrid module.
 """
 
 import sys
-from unittest.mock import MagicMock, patch
 import unittest
+from unittest.mock import MagicMock, patch
 
 # Mock the xesmf and esmpy modules to avoid installation issues
 sys.modules["xesmf"] = MagicMock()
 sys.modules["esmpy"] = MagicMock()
 
-import xarray as xr  # noqa: E402
 import numpy as np  # noqa: E402
+import xarray as xr  # noqa: E402
+
 from fengsha_prep.common import geos as regrid  # noqa: E402
 
 
