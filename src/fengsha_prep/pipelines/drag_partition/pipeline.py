@@ -1,5 +1,5 @@
 import logging
-from typing import Callable, Union
+from collections.abc import Callable
 
 import xarray as xr
 
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 def run_drag_partition_pipeline(
     start_date: str,
     end_date: str,
-    u10_wind: Union[float, xr.DataArray],
+    u10_wind: float | xr.DataArray,
     data_fetcher: Callable[[str, str, str], xr.Dataset] = get_modis_data,
 ) -> xr.DataArray:
     """Automated pipeline to fetch data and calculate the Drag Partition.

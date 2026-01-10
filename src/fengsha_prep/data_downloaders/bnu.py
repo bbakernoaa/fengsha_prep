@@ -6,7 +6,7 @@ import asyncio
 import logging
 import tomllib
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 import aiohttp
@@ -14,7 +14,8 @@ import aiohttp
 # Set up a logger for the module
 logger = logging.getLogger(__name__)
 
-def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
+
+def load_config(config_path: Path | None = None) -> dict[str, Any]:
     """
     Loads the configuration from a TOML file.
     If a path is provided, it's used. Otherwise, it defaults to the
@@ -28,7 +29,7 @@ def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
 
 async def _download_file(
     session: aiohttp.ClientSession, url: str, filepath: Path
-) -> Optional[Path]:
+) -> Path | None:
     """
     Asynchronously downloads a single file and saves it.
 
@@ -48,8 +49,8 @@ async def _download_file(
 
 
 async def _download_files_concurrently(
-    urls: List[str], output_dir: Path, concurrency_limit: int
-) -> List[Path]:
+    urls: list[str], output_dir: Path, concurrency_limit: int
+) -> list[Path]:
     """
     Asynchronously downloads a list of files concurrently.
 
@@ -91,8 +92,8 @@ async def get_bnu_data_async(
     data_type: str,
     output_dir: str = "bnu_data",
     concurrency_limit: int = 10,
-    config_path: Optional[Path] = None,
-) -> List[Path]:
+    config_path: Path | None = None,
+) -> list[Path]:
     """
     Asynchronously retrieves soil data from the BNU soil dataset by downloading
     it concurrently from URLs specified in the configuration file.
@@ -127,8 +128,8 @@ def get_bnu_data(
     data_type: str,
     output_dir: str = "bnu_data",
     concurrency_limit: int = 10,
-    config_path: Optional[Path] = None,
-) -> List[Path]:
+    config_path: Path | None = None,
+) -> list[Path]:
     """
     Retrieves soil data from the BNU soil dataset by downloading it
     concurrently from URLs specified in the configuration file.
@@ -148,5 +149,3 @@ def get_bnu_data(
     return asyncio.run(
         get_bnu_data_async(data_type, output_dir, concurrency_limit, config_path)
     )
-
-

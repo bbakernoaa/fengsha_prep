@@ -1,11 +1,9 @@
-from typing import Union
-
 import numpy as np
 import xarray as xr
 
 
 def calculate_drag_partition(
-    ds_alb: xr.Dataset, ds_lai: xr.Dataset, u10_wind: Union[float, xr.DataArray]
+    ds_alb: xr.Dataset, ds_lai: xr.Dataset, u10_wind: float | xr.DataArray
 ) -> xr.DataArray:
     """Calculates the Drag Partition using a hybrid model.
 

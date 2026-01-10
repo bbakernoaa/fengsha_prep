@@ -12,8 +12,9 @@ logging.basicConfig(
 )
 
 # --- AUTHENTICATION ---
-# This will prompt for your Earthdata credentials if not found in environment variables
-# For non-interactive environments, it's recommended to have credentials in a .netrc file.
+# This will prompt for your Earthdata credentials if not found in
+# environment variables. For non-interactive environments, it's recommended to
+# have credentials in a .netrc file.
 auth = earthaccess.login(strategy="interactive")
 
 # --- EXECUTION EXAMPLE ---
@@ -25,7 +26,9 @@ end_date_example = "2024-03-07"
 wind_speed_example = 7.5  # Constant wind speed in m/s
 
 logging.info(
-    f"Running hybrid drag partition model for {start_date_example} to {end_date_example}..."
+    "Running hybrid drag partition model for %s to %s...",
+    start_date_example,
+    end_date_example,
 )
 result_us_star = run_drag_partition_pipeline(
     start_date=start_date_example,
