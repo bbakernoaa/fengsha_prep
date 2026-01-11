@@ -2,6 +2,7 @@ import datetime
 from typing import Any
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 from satpy import Scene
 from sklearn.cluster import DBSCAN
@@ -14,6 +15,12 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "diff_10_8": 2.0,
     "temp_10": 280,
 }
+
+# --- Performance Tuning Constants for Clustering ---
+# If the number of dusty pixels exceeds this, downsample before clustering.
+PIXEL_COUNT_THRESHOLD = 75_000
+# The factor by which to downsample the dust mask (e.g., 4 means a 4x4 grid becomes 1 pixel).
+COARSEN_FACTOR = 4
 
 
 def detect_dust(scn: Scene, sat_id: str, thresholds: dict[str, float]) -> xr.DataArray:
@@ -70,9 +77,11 @@ def cluster_events(
 ) -> list[dict[str, Any]]:
     """Identifies distinct dust plumes from a dust mask using DBSCAN.
 
-    This function takes a binary dust mask, extracts the coordinates of the
-    dusty pixels, and uses the DBSCAN clustering algorithm to group them into
-    distinct events or plumes based on geographic proximity.
+    For performance on large dust events, this function first checks if the
+    number of dusty pixels exceeds a threshold. If so, it downsamples the
+    mask by coarsening before running DBSCAN. After clustering, it calculates
+    the centroid and area of each dust plume using a vectorized approach with
+    pandas for high efficiency.
 
     Parameters
     ----------
@@ -87,55 +96,56 @@ def cluster_events(
     -------
     List[Dict[str, Any]]
         A list of dictionaries, where each dictionary represents a detected
-        dust event with its properties (centroid, area, etc.).
+        dust event with its properties (centroid, area, etc.). An empty list
+        is returned if no dust pixels are found.
     """
-    # More memory-efficient way to get dusty pixel coordinates, avoiding
-    # the creation of large intermediate xarray objects.
-    y_indices, x_indices = np.where(dust_mask.values)
+    # --- Performance Optimization: Downsample large masks ---
+    # If the number of dusty pixels is very high, coarsening reduces the
+    # point count for DBSCAN, preventing memory issues and speeding up the process.
+    if np.sum(dust_mask).item() > PIXEL_COUNT_THRESHOLD:
+        dust_mask = dust_mask.coarsen(
+            dim={"x": COARSEN_FACTOR, "y": COARSEN_FACTOR}, boundary="trim"
+        ).max()
 
+    y_indices, x_indices = np.where(dust_mask.values)
     if y_indices.size == 0:
         return []
 
-    # Extract the lat/lon coordinates for the dusty pixels directly.
-    # Assumes 'lat' and 'lon' are 2D coordinates in the DataArray.
     lats = dust_mask.lat.values[y_indices, x_indices]
     lons = dust_mask.lon.values[y_indices, x_indices]
     coords_deg = np.column_stack((lats, lons))
-
-    # For accurate geographic clustering, we use the haversine metric, which
-    # requires coordinates in radians.
     coords_rad = np.radians(coords_deg)
 
-    # DBSCAN eps is the search radius. For haversine, it's in radians.
-    # We want a radius of ~20km to ensure plume continuity. Earth's radius is ~6371 km.
-    # eps = 20 km / 6371 km
+    # --- Clustering ---
+    # Use Haversine for geographic distances and run in parallel (n_jobs=-1).
     earth_radius_km: float = 6371.0
     eps_km: float = 20.0
     eps_rad: float = eps_km / earth_radius_km
-
-    db = DBSCAN(eps=eps_rad, min_samples=10, metric="haversine").fit(coords_rad)
+    db = DBSCAN(eps=eps_rad, min_samples=10, metric="haversine", n_jobs=-1).fit(
+        coords_rad
+    )
     labels: np.ndarray = db.labels_
-    unique_labels: set = set(labels)
 
-    events: list[dict[str, Any]] = []
-    for k in unique_labels:
-        if k == -1:
-            continue
+    # --- Vectorized Centroid Calculation ---
+    # This approach is significantly faster than looping through each cluster.
+    # It uses pandas to group all clustered points by their label and
+    # calculates the mean lat/lon and size of each group in a single operation.
+    df = pd.DataFrame({"lat": coords_deg[:, 0], "lon": coords_deg[:, 1], "label": labels})
+    # Filter out noise points (label -1)
+    df_clusters = df[df["label"] != -1]
 
-        class_member_mask: np.ndarray = labels == k
-        cluster_coords_deg: np.ndarray = coords_deg[class_member_mask]
+    if df_clusters.empty:
+        return []
 
-        lat_mean: float = np.mean(cluster_coords_deg[:, 0])
-        lon_mean: float = np.mean(cluster_coords_deg[:, 1])
-        area_px: int = len(cluster_coords_deg)
+    # Group by cluster label and aggregate
+    grouped = df_clusters.groupby("label").agg(
+        latitude=("lat", "mean"),
+        longitude=("lon", "mean"),
+        area_pixels=("lat", "size"),
+    )
 
-        events.append(
-            {
-                "datetime": scn_time,
-                "latitude": float(lat_mean),
-                "longitude": float(lon_mean),
-                "area_pixels": int(area_px),
-                "satellite": sat_id,
-            }
-        )
-    return events
+    # --- Format Output ---
+    grouped["datetime"] = scn_time
+    grouped["satellite"] = sat_id
+    # Reset index to turn the 'label' group key into a column, then format as records.
+    return grouped.reset_index(drop=True).to_dict("records")
