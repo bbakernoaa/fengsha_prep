@@ -19,7 +19,8 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
 # --- Performance Tuning Constants for Clustering ---
 # If the number of dusty pixels exceeds this, downsample before clustering.
 PIXEL_COUNT_THRESHOLD = 75_000
-# The factor by which to downsample the dust mask (e.g., 4 means a 4x4 grid becomes 1 pixel).
+# The factor by which to downsample the dust mask (e.g., a factor of 4
+# means a 4x4 grid becomes 1 pixel).
 COARSEN_FACTOR = 4
 
 
@@ -130,7 +131,13 @@ def cluster_events(
     # This approach is significantly faster than looping through each cluster.
     # It uses pandas to group all clustered points by their label and
     # calculates the mean lat/lon and size of each group in a single operation.
-    df = pd.DataFrame({"lat": coords_deg[:, 0], "lon": coords_deg[:, 1], "label": labels})
+    df = pd.DataFrame(
+        {
+            "lat": coords_deg[:, 0],
+            "lon": coords_deg[:, 1],
+            "label": labels,
+        }
+    )
     # Filter out noise points (label -1)
     df_clusters = df[df["label"] != -1]
 

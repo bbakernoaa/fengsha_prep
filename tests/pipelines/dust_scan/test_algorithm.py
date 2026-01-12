@@ -207,5 +207,6 @@ def test_cluster_events_downsampling_for_large_plume():
     # the new side length is floor(649/4) - floor(350/4) + 1 = 162 - 87 + 1 = 76.
     # The expected area is 76 * 76 = 5776.
     expected_area_after_coarsening = 76**2
-    # The clustering should be exact for a solid block, so a small tolerance is sufficient.
+    # The clustering should be exact for a solid block, so a small tolerance
+    # is sufficient.
     assert abs(event["area_pixels"] - expected_area_after_coarsening) < 10
