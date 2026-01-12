@@ -165,3 +165,48 @@ def test_cluster_events_with_multiple_plumes():
     assert abs(events[1]["area_pixels"] - 400) < 20
     # Check that the centroids are in different locations
     assert abs(events[0]["latitude"] - events[1]["latitude"]) > 1.0
+
+
+def test_cluster_events_downsampling_for_large_plume():
+    """
+    Tests that the downsampling logic is triggered for a very large plume
+    and still correctly identifies a single event. This prevents performance
+    issues with DBSCAN on massive datasets.
+    """
+    # Create a very large dust plume that will exceed the PIXEL_COUNT_THRESHOLD
+    shape = (1000, 1000)
+    lats = np.linspace(30, 40, shape[0])
+    lons = np.linspace(-100, -90, shape[1])
+    lon2d, lat2d = np.meshgrid(lons, lats)
+
+    dust_data = np.zeros(shape, dtype=bool)
+    # A large plume of 300x300 = 90,000 pixels, which is > PIXEL_COUNT_THRESHOLD
+    dust_data[350:650, 350:650] = True
+
+    dust_mask = xr.DataArray(
+        dust_data,
+        coords={"lat": (("y", "x"), lat2d), "lon": (("y", "x"), lon2d)},
+        dims=("y", "x"),
+    )
+
+    scn_time = datetime.datetime.now()
+    events = cluster_events(dust_mask, scn_time, "goes16")
+
+    # --- Verification ---
+    # 1. Check that it still identifies one cluster despite downsampling.
+    assert len(events) == 1
+
+    # 2. Check that the centroid is in the correct general location.
+    event = events[0]
+    assert 34.5 < event["latitude"] < 35.5
+    assert -95.5 < event["longitude"] < -94.5
+
+    # 3. The area will be smaller due to coarsening, but should still be substantial.
+    # 3. The area will be smaller due to coarsening, but should still be substantial.
+    # The original 300x300 plume starts at index 350. After coarsening by a factor of 4,
+    # the new side length is floor(649/4) - floor(350/4) + 1 = 162 - 87 + 1 = 76.
+    # The expected area is 76 * 76 = 5776.
+    expected_area_after_coarsening = 76**2
+    # The clustering should be exact for a solid block, so a small tolerance
+    # is sufficient.
+    assert abs(event["area_pixels"] - expected_area_after_coarsening) < 10
