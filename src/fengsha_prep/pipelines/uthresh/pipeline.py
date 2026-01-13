@@ -10,7 +10,7 @@ References:
 """
 
 from datetime import datetime
-from typing import Optional, Protocol
+from typing import Protocol
 
 import xarray as xr
 from xgboost import XGBRegressor
@@ -183,7 +183,7 @@ def run_uthresh_pipeline(
     lat: float,
     lon: float,
     model: XGBRegressor,
-    data_fetcher: Optional[DataFetcher] = None,
+    data_fetcher: DataFetcher | None = None,
 ) -> xr.Dataset:
     """
     Full end-to-end pipeline for a single point in time and space.

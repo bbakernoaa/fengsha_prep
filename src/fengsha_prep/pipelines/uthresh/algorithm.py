@@ -206,7 +206,6 @@ def predict_threshold_velocity(
     H_aligned = H.broadcast_like(lai)
 
     # Define the order of features expected by the model
-    feature_names = ["clay", "soc", "bdod", "R_partition", "h_w_inhibition", "lai"]
     feature_arrays = [
         ds_soil_aligned["clay"],
         ds_soil_aligned["soc"],

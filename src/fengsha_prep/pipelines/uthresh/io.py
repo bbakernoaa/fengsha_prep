@@ -69,7 +69,8 @@ class AsyncDustDataEngine:
         Returns
         -------
         xarray.Dataset
-            A dataset containing the meteorological variables for the nearest grid point.
+            A dataset containing the meteorological variables for the nearest
+            grid point.
         """
         bucket = "noaa-ufs-gefsv13replay-pds"
         path = f"s3://{bucket}/{dt.strftime('%Y%m%d/%H')}/atmos/gefs.t{dt.strftime('%H')}z.pgrb2.0p25.f000"
