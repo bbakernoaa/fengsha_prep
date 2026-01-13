@@ -28,11 +28,9 @@ from .io import DustDataEngine
 class DataFetcher(Protocol):
     """Defines the interface for a data fetching object."""
 
-    def fetch_met_ufs(self, dt: datetime, lat: float, lon: float) -> xr.Dataset:
-        ...
+    def fetch_met_ufs(self, dt: datetime, lat: float, lon: float) -> xr.Dataset: ...
 
-    def fetch_soilgrids(self, lat: float, lon: float) -> dict[str, float]:
-        ...
+    def fetch_soilgrids(self, lat: float, lon: float) -> dict[str, float]: ...
 
 
 # --- HELPER FUNCTIONS FOR FLUX CALCULATION ---

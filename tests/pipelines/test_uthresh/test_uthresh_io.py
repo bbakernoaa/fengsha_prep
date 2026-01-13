@@ -1,6 +1,7 @@
 """
 Tests for the I/O operations of the uthresh pipeline.
 """
+
 import asyncio
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -111,9 +112,12 @@ async def test_async_engine_fetch_soilgrids_concurrently():
     mock_rasterio_context = MagicMock()
     mock_rasterio_context.__enter__.return_value = mock_rasterio_file
 
-    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread, patch(
-        "fengsha_prep.pipelines.uthresh.io.rasterio.open",
-        return_value=mock_rasterio_context,
+    with (
+        patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread,
+        patch(
+            "fengsha_prep.pipelines.uthresh.io.rasterio.open",
+            return_value=mock_rasterio_context,
+        ),
     ):
         # Make `to_thread` just return a value directly
         mock_to_thread.return_value = 42.0

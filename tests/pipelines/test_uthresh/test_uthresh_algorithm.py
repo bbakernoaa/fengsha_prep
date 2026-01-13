@@ -1,6 +1,7 @@
 """
 Tests for the core algorithms of the uthresh pipeline.
 """
+
 from unittest.mock import MagicMock
 
 import numpy as np
