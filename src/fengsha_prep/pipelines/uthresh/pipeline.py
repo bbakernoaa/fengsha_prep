@@ -12,7 +12,6 @@ References:
 from datetime import datetime
 from typing import Protocol
 
-import numpy as np
 import xarray as xr
 from xgboost import XGBRegressor
 

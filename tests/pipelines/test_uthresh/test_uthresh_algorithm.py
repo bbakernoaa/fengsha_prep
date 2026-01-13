@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+
 from fengsha_prep.pipelines.uthresh.algorithm import (
     compute_hybrid_drag_partition,
     compute_moisture_inhibition,
@@ -108,7 +109,11 @@ def test_predict_threshold_velocity(mock_geo_data):
     )
     R = xr.DataArray(np.full((10, 10), 0.05), dims=mock_geo_data["dims"])
     H = xr.DataArray(np.full((10, 10), 1.2), dims=mock_geo_data["dims"])
-    lai = xr.DataArray(np.full((10, 10), 1.5), dims=mock_geo_data["dims"], coords=mock_geo_data["coords"])
+    lai = xr.DataArray(
+        np.full((10, 10), 1.5),
+        dims=mock_geo_data["dims"],
+        coords=mock_geo_data["coords"],
+    )
 
     result = predict_threshold_velocity(mock_model, ds_soil, R, H, lai)
 
