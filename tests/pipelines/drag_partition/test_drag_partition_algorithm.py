@@ -30,16 +30,17 @@ def test_calculate_drag_partition_pure_logic():
         {"Lai": (("y", "x"), np.full((2, 2), 0.5))},  # Produces a moderate sigma_g
         coords={"y": [1, 2], "x": [1, 2]},
     )
-    u10_wind = 10.0
 
     # Execute the algorithm
-    result = calculate_drag_partition(ds_alb, ds_lai, u10_wind)
+    result = calculate_drag_partition(ds_alb, ds_lai)
 
     # Assertions
     assert isinstance(result, xr.DataArray)
     assert not np.isnan(result).any()
     assert result.mean() > 0  # Check for a physically plausible result
 
-    # Check that the history attribute is correctly set
+    # Check that attributes are correctly set for feff
+    assert result.attrs["long_name"] == "Effective Drag Coefficient"
+    assert result.attrs["units"] == "dimensionless"
     assert "history" in result.attrs
     assert "Calculated at" in result.attrs["history"]
