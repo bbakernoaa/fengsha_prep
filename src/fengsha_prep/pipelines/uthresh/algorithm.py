@@ -172,10 +172,12 @@ def predict_threshold_velocity(
     lai: xr.DataArray,
 ) -> xr.DataArray:
     """
-    Predicts the threshold friction velocity (u*t) using the trained PIML model.
+    Predicts threshold friction velocity (u*t) using the trained PIML model.
 
-    This function prepares the feature DataFrame from input xarray objects,
-    runs the prediction, and reshapes the result back into a DataArray.
+    This high-performance version avoids creating an intermediate Pandas DataFrame.
+    Instead, it stacks the input DataArrays, constructs a NumPy feature array,
+    runs the prediction, and reshapes the result back into a DataArray with
+    the original coordinates preserved.
 
     Parameters
     ----------
@@ -193,23 +195,38 @@ def predict_threshold_velocity(
     Returns
     -------
     xr.DataArray
-        A DataArray of the predicted threshold friction velocity.
+        A DataArray of the predicted threshold friction velocity, with dimensions
+        matching the input `lai` DataArray.
     """
-    feature_df = pd.DataFrame(
-        {
-            "clay": ds_soil["clay"].values.ravel(),
-            "soc": ds_soil["soc"].values.ravel(),
-            "bdod": ds_soil["bdod"].values.ravel(),
-            "R_partition": R.values.ravel(),
-            "h_w_inhibition": H.values.ravel(),
-            "lai": lai.values.ravel(),
-        }
-    )
+    # Ensure all inputs are aligned to the same grid as LAI
+    # This is safer and prevents accidental misalignments.
+    ds_soil_aligned = ds_soil.broadcast_like(lai)
+    R_aligned = R.broadcast_like(lai)
+    H_aligned = H.broadcast_like(lai)
 
-    u_thresh_flat = model.predict(feature_df)
+    # Define the order of features expected by the model
+    feature_names = ["clay", "soc", "bdod", "R_partition", "h_w_inhibition", "lai"]
+    feature_arrays = [
+        ds_soil_aligned["clay"],
+        ds_soil_aligned["soc"],
+        ds_soil_aligned["bdod"],
+        R_aligned,
+        H_aligned,
+        lai,
+    ]
 
+    # Stack the arrays into a 2D feature matrix (n_points, n_features)
+    # The .values call extracts the underlying numpy array.
+    feature_matrix = np.vstack([arr.values.ravel() for arr in feature_arrays]).T
+
+    # Run prediction on the raw numpy data
+    u_thresh_flat = model.predict(feature_matrix)
+
+    # Reshape the flat prediction array back to the original spatial dimensions
+    # and return it as a DataArray with proper coordinates.
     return xr.DataArray(
         u_thresh_flat.reshape(lai.shape),
         coords=lai.coords,
         dims=lai.dims,
+        name="threshold_velocity",
     )
