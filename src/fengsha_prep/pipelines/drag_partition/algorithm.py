@@ -2,27 +2,23 @@ import numpy as np
 import xarray as xr
 
 
-def calculate_drag_partition(
-    ds_alb: xr.Dataset, ds_lai: xr.Dataset, u10_wind: float | xr.DataArray
-) -> xr.DataArray:
-    """Calculates the Drag Partition using a hybrid model.
+def calculate_drag_partition(ds_alb: xr.Dataset, ds_lai: xr.Dataset) -> xr.DataArray:
+    """Calculates the effective drag (feff) using a hybrid model.
 
     This is a pure function that encapsulates the scientific logic for
-    estimating surface friction velocity (us*).
+    estimating the effective drag coefficient.
 
     Parameters
     ----------
     ds_alb : xr.Dataset
-        The MODIS Albedo dataset (e.g., MCD43C3).
+        The Albedo dataset (e.g., MCD43C3, VJ143C3).
     ds_lai : xr.Dataset
-        The MODIS LAI dataset (e.g., MCD15A2H).
-    u10_wind : Union[float, xr.DataArray]
-        The 10-meter wind speed.
+        The LAI dataset (e.g., MCD15A2H, VNP15A2H).
 
     Returns
     -------
     xr.DataArray
-        A DataArray representing the calculated surface friction velocity (us*).
+        A DataArray representing the calculated effective drag (feff).
     """
     # Align LAI to Albedo grid (0.05 degree CMG)
     ds_lai = ds_lai.interp_like(ds_alb, method="nearest")
@@ -52,12 +48,12 @@ def calculate_drag_partition(
         -(lambda_g + lambda_b) / 0.1
     )
 
-    # Calculate Surface Friction Velocity (us*)
-    us_star = u10_wind * (ra_bare * f_veg)
-    us_star.attrs["long_name"] = "Surface Friction Velocity"
-    us_star.attrs["units"] = "m s-1"
-    us_star.attrs["history"] = (
+    # Calculate effective drag (feff)
+    feff = ra_bare * f_veg
+    feff.attrs["long_name"] = "Effective Drag Coefficient"
+    feff.attrs["units"] = "dimensionless"
+    feff.attrs["history"] = (
         f"Calculated at {np.datetime64('now')} using the hybrid drag partition model."
     )
 
-    return us_star
+    return feff

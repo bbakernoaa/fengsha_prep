@@ -1,25 +1,28 @@
 import logging
 from collections.abc import Callable
+from typing import Literal
 
 import xarray as xr
 
 from .algorithm import calculate_drag_partition
-from .io import get_modis_data
+from .io import get_cmg_data
 
 # Set up a logger for the module
 logger = logging.getLogger(__name__)
+
+Sensor = Literal["MODIS", "VIIRS"]
 
 
 def run_drag_partition_pipeline(
     start_date: str,
     end_date: str,
-    u10_wind: float | xr.DataArray,
-    data_fetcher: Callable[[str, str, str], xr.Dataset] = get_modis_data,
+    sensor: Sensor = "MODIS",
+    data_fetcher: Callable[[str, str, str, Sensor], xr.Dataset] = get_cmg_data,
 ) -> xr.DataArray:
-    """Automated pipeline to fetch data and calculate the Drag Partition.
+    """Automated pipeline to fetch data and calculate the effective drag (feff).
 
-    This function implements a hybrid model to estimate the surface friction
-    velocity (us*) by partitioning drag between bare soil, green vegetation,
+    This function implements a hybrid model to estimate the effective drag
+    coefficient by partitioning drag between bare soil, green vegetation,
     and non-photosynthetic (brown) vegetation.
 
     Parameters
@@ -28,17 +31,17 @@ def run_drag_partition_pipeline(
         The start date for the analysis in 'YYYY-MM-DD' format.
     end_date : str
         The end date for the analysis in 'YYYY-MM-DD' format.
-    u10_wind : Union[float, xr.DataArray]
-        The 10-meter wind speed. Can be a constant (float) or a DataArray
-        with dimensions matching the MODIS grid.
-    data_fetcher : Callable[[str, str, str], xr.Dataset], optional
-        A function that retrieves MODIS data. Defaults to `get_modis_data`.
+    sensor : Sensor, optional
+        The sensor to use for data retrieval. Can be 'MODIS' or 'VIIRS'.
+        Defaults to 'MODIS'.
+    data_fetcher : Callable[[str, str, str, Sensor], xr.Dataset], optional
+        A function that retrieves CMG data. Defaults to `get_cmg_data`.
         This parameter allows for dependency injection, primarily for testing.
 
     Returns
     -------
     xr.DataArray
-        A DataArray representing the calculated surface friction velocity (us*).
+        A DataArray representing the calculated effective drag (feff).
 
     References
     ----------
@@ -47,10 +50,10 @@ def run_drag_partition_pipeline(
     - Hennen et al. (2023): DOI 10.1016/j.aeolia.2022.100852
     - Guerschman et al. (2009): DOI 10.1016/j.rse.2009.01.006
     """
-    logger.info("Fetching MODIS Albedo (MCD43C3)...")
-    ds_alb = data_fetcher("MCD43C3", start_date, end_date)
+    logger.info(f"Fetching {sensor} Albedo data...")
+    ds_alb = data_fetcher("albedo", start_date, end_date, sensor)
 
-    logger.info("Fetching MODIS LAI (MCD15A2H)...")
-    ds_lai = data_fetcher("MCD15A2H", start_date, end_date)
+    logger.info(f"Fetching {sensor} LAI data...")
+    ds_lai = data_fetcher("lai", start_date, end_date, sensor)
 
-    return calculate_drag_partition(ds_alb, ds_lai, u10_wind)
+    return calculate_drag_partition(ds_alb, ds_lai)

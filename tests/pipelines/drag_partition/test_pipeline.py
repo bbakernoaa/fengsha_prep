@@ -1,22 +1,15 @@
 from unittest.mock import MagicMock
 
+import pytest
 import xarray as xr
 
 from fengsha_prep.pipelines.drag_partition.pipeline import run_drag_partition_pipeline
 
 
-def test_run_drag_partition_pipeline_integration():
-    """Integration test for the drag partition pipeline.
-
-    This test verifies the end-to-end orchestration of the pipeline. It uses
-    a mock `data_fetcher` to simulate the I/O operations, ensuring that the
-    pipeline correctly calls the data fetching logic and passes the results
-    to the algorithm.
-    """
-    # Create a mock data_fetcher function
+@pytest.fixture
+def mock_data_fetcher():
+    """Pytest fixture to create a mock data fetcher."""
     mock_fetcher = MagicMock()
-
-    # Configure the mock to return a dummy xarray Dataset
     dummy_ds = xr.Dataset(
         {
             "Albedo_BSW_Band1": (("y", "x"), [[0.15]]),
@@ -27,16 +20,41 @@ def test_run_drag_partition_pipeline_integration():
         }
     )
     mock_fetcher.return_value = dummy_ds
+    return mock_fetcher
 
-    # Execute the pipeline with the mock fetcher
+
+def test_run_drag_partition_pipeline_integration_modis(mock_data_fetcher):
+    """Integration test for the drag partition pipeline with MODIS sensor.
+
+    This test verifies the end-to-end orchestration of the pipeline for the
+    default MODIS sensor. It uses a mock `data_fetcher` to ensure the correct
+    product types are requested.
+    """
     start_date = "2024-01-01"
     end_date = "2024-01-07"
-    u10_wind = 10.0
     run_drag_partition_pipeline(
-        start_date, end_date, u10_wind, data_fetcher=mock_fetcher
+        start_date, end_date, sensor="MODIS", data_fetcher=mock_data_fetcher
     )
 
-    # Assert that the data_fetcher was called twice (once for Albedo, once for LAI)
-    assert mock_fetcher.call_count == 2
-    mock_fetcher.assert_any_call("MCD43C3", start_date, end_date)
-    mock_fetcher.assert_any_call("MCD15A2H", start_date, end_date)
+    # Assert that the data_fetcher was called twice
+    assert mock_data_fetcher.call_count == 2
+    mock_data_fetcher.assert_any_call("albedo", start_date, end_date, "MODIS")
+    mock_data_fetcher.assert_any_call("lai", start_date, end_date, "MODIS")
+
+
+def test_run_drag_partition_pipeline_integration_viirs(mock_data_fetcher):
+    """Integration test for the drag partition pipeline with VIIRS sensor.
+
+    This test verifies that the pipeline correctly requests data for the
+    VIIRS sensor when specified.
+    """
+    start_date = "2024-01-01"
+    end_date = "2024-01-07"
+    run_drag_partition_pipeline(
+        start_date, end_date, sensor="VIIRS", data_fetcher=mock_data_fetcher
+    )
+
+    # Assert that the data_fetcher was called twice
+    assert mock_data_fetcher.call_count == 2
+    mock_data_fetcher.assert_any_call("albedo", start_date, end_date, "VIIRS")
+    mock_data_fetcher.assert_any_call("lai", start_date, end_date, "VIIRS")
