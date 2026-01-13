@@ -1,6 +1,7 @@
 """
 Tests for the orchestration layer of the uthresh pipeline.
 """
+
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -77,13 +78,17 @@ def test_generate_dust_flux_map_orchestration(
     mock_model = MagicMock()
 
     # Mock the functions from the algorithm module that are called by the pipeline
-    with patch(
-        "fengsha_prep.pipelines.uthresh.pipeline.compute_hybrid_drag_partition"
-    ) as mock_drag, patch(
-        "fengsha_prep.pipelines.uthresh.pipeline.compute_moisture_inhibition"
-    ) as mock_moisture, patch(
-        "fengsha_prep.pipelines.uthresh.pipeline.predict_threshold_velocity"
-    ) as mock_predict:
+    with (
+        patch(
+            "fengsha_prep.pipelines.uthresh.pipeline.compute_hybrid_drag_partition"
+        ) as mock_drag,
+        patch(
+            "fengsha_prep.pipelines.uthresh.pipeline.compute_moisture_inhibition"
+        ) as mock_moisture,
+        patch(
+            "fengsha_prep.pipelines.uthresh.pipeline.predict_threshold_velocity"
+        ) as mock_predict,
+    ):
         # Define the return values for the mocked algorithm functions
         mock_drag.return_value = xr.DataArray(0.05)
         mock_moisture.return_value = xr.DataArray(1.2)
