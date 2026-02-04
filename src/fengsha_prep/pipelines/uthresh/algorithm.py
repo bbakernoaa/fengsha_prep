@@ -2,11 +2,14 @@
 Core algorithms for the uthresh pipeline.
 Includes physics-based models and machine learning components.
 """
-
+import logging
 import numpy as np
 import pandas as pd
 import xarray as xr
 from xgboost import XGBRegressor
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 # --- CONFIGURATION & PARAMETERS ---
 IGBP_B_MAP: dict[int, float] = {
@@ -32,42 +35,96 @@ IGBP_B_MAP: dict[int, float] = {
 
 
 def compute_hybrid_drag_partition(
-    ds_alb: xr.Dataset, ds_lai: xr.Dataset, igbp_class: int | xr.DataArray
+    ds_brdf: xr.Dataset,
+    ds_lai: xr.Dataset,
+    igbp_class: int | xr.DataArray,
+    ds_albedo: xr.Dataset | None = None,
+    ds_gvf: xr.Dataset | None = None,
+    ds_nbar: xr.Dataset | None = None,
 ) -> xr.DataArray:
     """
     Calculates the roughness ratio R (us*/u*) using a hybrid model.
 
     This model combines the Chappell & Webb (2016) bare soil shadowing
-    component with the Leung et al. (2 XXIII) vegetation sheltering component.
+    component with the Leung et al. (2023) vegetation sheltering component.
 
     Parameters
     ----------
-    ds_alb : xarray.Dataset
-        Dataset containing albedo variables, including 'Albedo_BSW_Band1'
-        and 'BRDF_Albedo_Parameter_Isotropic_Band1'.
+    ds_brdf : xarray.Dataset
+        Dataset containing BRDF parameters (f_iso, f_vol, f_geo).
     ds_lai : xarray.Dataset
-        Dataset containing 'Lai' (Leaf Area Index).
+        Dataset containing 'Lai' or 'LAI' (Leaf Area Index).
     igbp_class : Union[int, xarray.DataArray]
         IGBP land cover class(es).
+    ds_albedo : xarray.Dataset, optional
+        Dataset containing Albedo parameters (BSA). Defaults to None.
+    ds_gvf : xarray.Dataset, optional
+        Dataset containing 'gvf_4km'. Defaults to None.
+    ds_nbar : xarray.Dataset, optional
+        Dataset containing NBAR reflectances. Defaults to None.
 
     Returns
     -------
     xarray.DataArray
         The calculated drag partition ratio (R).
     """
-    # Bare component (Shadowing)
-    omega_n = 1.0 - (
-        ds_alb["Albedo_BSW_Band1"] / ds_alb["BRDF_Albedo_Parameter_Isotropic_Band1"]
-    )
+    logger.info("Computing hybrid drag partition (R)...")
+
+    # Bare component (Shadowing) - Chappell & Webb (2016)
+    def get_var(ds, search_terms):
+        if ds is None: return None
+        for v in ds.data_vars:
+            if all(term in v for term in search_terms):
+                return ds[v]
+        return None
+
+    logger.debug("Identifying f_iso (isotropic) parameter...")
+    f_iso = get_var(ds_brdf, ["Isotropic", "Band1"])
+    if f_iso is None: f_iso = get_var(ds_brdf, ["Isotropic", "M5"])
+    if f_iso is None: f_iso = get_var(ds_brdf, ["Isotropic", "M4"])
+    if f_iso is None: f_iso = get_var(ds_brdf, ["Parameter1", "M5"])
+    if f_iso is None: f_iso = get_var(ds_brdf, ["Parameter1", "M4"])
+
+    if f_iso is None:
+        logger.error(f"Required Isotropic parameter missing. Available: {list(ds_brdf.data_vars)}")
+        raise KeyError(f"Could not find Isotropic parameter in BRDF dataset. Found: {list(ds_brdf.data_vars)}")
+
+    logger.debug("Identifying BSA (albedo) parameter...")
+    bsa = get_var(ds_albedo, ["BSA", "Band1"])
+    if bsa is None: bsa = get_var(ds_albedo, ["BSA", "M5"])
+    if bsa is None: bsa = get_var(ds_albedo, ["BSA", "M4"])
+    if bsa is None: bsa = get_var(ds_brdf, ["BSA", "Band1"])
+    if bsa is None: bsa = get_var(ds_brdf, ["BSA", "M5"])
+    if bsa is None: bsa = get_var(ds_brdf, ["BSA", "M4"])
+    if bsa is None:
+        logger.warning("BSA missing, falling back to Isotropic (BSA=f_iso)")
+        bsa = f_iso
+
+    logger.info("Computing shadow ratio (omega_n)...")
+    omega_n = (1.0 - (bsa / f_iso)).clip(0, 1) * 100.0
+
+    # Scale to shadow-volume omega_ns
+    logger.info("Scaling to shadow volume (omega_ns)...")
     omega_ns = ((0.0001 - 0.1) * (omega_n - 35.0) / (0.0 - 35.0)) + 0.1
+    omega_ns = omega_ns.clip(0.0001, 0.1)
     ra_bare = 0.0311 * np.exp(-omega_ns / 1.131) + 0.007
 
     # Veg component (Sheltering)
+    logger.info("Computing vegetation component...")
     b_param = IGBP_B_MAP.get(igbp_class, 0.1)
-    sigma_total = (1.0 - np.exp(-0.5 * ds_lai["Lai"])).clip(0, 1)
-    lambda_total = (ds_lai["Lai"] / 2.0) + 0.05
+
+    lai_var = "Lai" if "Lai" in ds_lai else "LAI"
+    lai = ds_lai[lai_var]
+
+    if ds_gvf is not None and "gvf_4km" in ds_gvf:
+        sigma_total = ds_gvf["gvf_4km"].clip(0, 1)
+    else:
+        sigma_total = (1.0 - np.exp(-0.5 * lai)).clip(0, 1)
+
+    lambda_total = (lai / 2.0) + 0.05
     f_veg = (1.0 - sigma_total) * np.exp(-lambda_total / b_param)
 
+    logger.info("Hybrid drag partition calculation complete.")
     return ra_bare * f_veg
 
 
@@ -127,7 +184,7 @@ def prepare_balanced_training(df: pd.DataFrame) -> pd.DataFrame:
         df["clay"], bins=[0, 15, 30, 100], labels=["Sand", "Loam", "Clay"]
     )
     # Sample equally across land-use/soil combinations
-    return df.groupby(["igbp", "texture"], group_keys=False).apply(
+    return df.groupby(["igbp", "texture"], group_keys=False, observed=False).apply(
         lambda x: x.sample(min(len(x), 300))
     )
 

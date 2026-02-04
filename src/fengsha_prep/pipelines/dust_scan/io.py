@@ -2,12 +2,13 @@ import asyncio
 import datetime
 import glob
 import logging
-from typing import Any
-
 import s3fs
 from satpy import Scene
 
 from fengsha_prep.common import satellite
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 
 async def _load_scene_from_s3(
@@ -16,22 +17,26 @@ async def _load_scene_from_s3(
     """Asynchronously loads a single satellite scene from an AWS S3 bucket."""
     s3 = s3fs.S3FileSystem(asynchronous=True, anon=True)
     try:
+        logger.info(f"Retrieving S3 path for {sat_id} at {scn_time}...")
         s3_path = await satellite.get_s3_path(s3, sat_id, scn_time)
         if not await s3.exists(s3_path):
-            logging.debug(f"No S3 file found for {sat_id} at {scn_time}")
+            logger.debug(f"No S3 file found for {sat_id} at {scn_time}")
             return None
 
         # Satpy's Scene is blocking, so we run it in a thread.
         # The key is that the file check (`s3.exists`) is non-blocking.
         def _blocking_load():
+            logger.info(f"Opening S3 file with Satpy: {s3_path}")
             scn = Scene(reader=meta["reader"], filenames=[s3_path])
+            logger.debug(f"Loading bands: {meta['bands']}")
             scn.load(meta["bands"])
+            logger.debug("Resampling scene to native resolution...")
             return scn.resample(resampler="native")
 
         return await asyncio.to_thread(_blocking_load)
 
     except Exception as e:
-        logging.error(f"Error loading GOES data for {scn_time} from S3: {e}")
+        logger.error(f"Error loading GOES data for {scn_time} from S3: {e}")
         return None
 
 
@@ -44,18 +49,22 @@ def _load_scene_from_local(
     """Loads a single satellite scene from the local filesystem."""
     try:
         search_dir = data_dir if data_dir is not None else "data"
+        logger.debug(f"Searching for local files in {search_dir}...")
         files = glob.glob(f"{search_dir}/*{scn_time.strftime('%Y%j%H%M')}*.*")
         if not files:
-            logging.debug(
+            logger.debug(
                 f"No local files found for {sat_id} at {scn_time} in {search_dir}"
             )
             return None
 
+        logger.info(f"Loading {len(files)} local files with Satpy...")
         scn = Scene(filenames=files, reader=meta["reader"])
+        logger.debug(f"Loading bands: {meta['bands']}")
         scn.load(meta["bands"])
+        logger.debug("Resampling scene to native resolution...")
         return scn.resample(resampler="native")
     except Exception as e:
-        logging.error(f"Error loading local data for {scn_time}: {e}")
+        logger.error(f"Error loading local data for {scn_time}: {e}")
         return None
 
 

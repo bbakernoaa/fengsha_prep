@@ -37,16 +37,14 @@ class DataFetcher(Protocol):
 
 
 def _prepare_physical_features(
-    ds_alb: xr.Dataset,
-    ds_lai: xr.Dataset,
-    ds_lc: xr.Dataset,
     ds_soil: xr.Dataset,
     ds_met: xr.Dataset,
+    ds_drag: xr.Dataset | xr.DataArray,
 ) -> tuple[xr.DataArray, xr.DataArray]:
     """
     Computes intermediate physical variables for the flux calculation.
 
-    - R: The drag partition ratio.
+    - R: The drag partition ratio (feff from drag_partition pipeline).
     - H: The moisture inhibition factor.
 
     Returns
@@ -54,7 +52,11 @@ def _prepare_physical_features(
     Tuple[xr.DataArray, xr.DataArray]
         A tuple containing the R and H DataArrays.
     """
-    R = compute_hybrid_drag_partition(ds_alb, ds_lai, ds_lc["LC_Type1"])
+    if isinstance(ds_drag, xr.Dataset):
+        R = ds_drag["feff"]
+    else:
+        R = ds_drag
+
     H = compute_moisture_inhibition(ds_met["soilw"], ds_soil["clay"], ds_soil["soc"])
     R.name = "drag_partition_ratio"
     H.name = "moisture_inhibition_factor"
@@ -114,12 +116,11 @@ def _calculate_sandblasting_efficiency(clay_fraction: xr.DataArray) -> xr.DataAr
 
 
 def generate_dust_flux_map(
-    ds_alb: xr.Dataset,
+    model: XGBRegressor,
+    ds_drag: xr.Dataset | xr.DataArray,
     ds_lai: xr.Dataset,
-    ds_lc: xr.Dataset,
     ds_soil: xr.Dataset,
     ds_met: xr.Dataset,
-    model: XGBRegressor,
 ) -> xr.DataArray:
     """
     Orchestrates the physics and ML components to produce a dust flux map.
@@ -130,18 +131,17 @@ def generate_dust_flux_map(
 
     Parameters
     ----------
-    ds_alb : xarray.Dataset
-        Albedo data.
+    model : xgboost.XGBRegressor
+        The trained PIML model for predicting threshold velocity.
+    ds_drag : xarray.Dataset | xarray.DataArray
+        Pre-calculated drag partition data (e.g., from drag_partition pipeline).
+        Should contain the 'feff' variable if a Dataset is provided.
     ds_lai : xarray.Dataset
         Leaf Area Index data.
-    ds_lc : xarray.Dataset
-        Land Cover data ('LC_Type1').
     ds_soil : xarray.Dataset
         Soil properties data ('clay', 'soc', 'bdod').
     ds_met : xarray.Dataset
         Meteorological data ('soilw', 'ustar').
-    model : xgboost.XGBRegressor
-        The trained PIML model for predicting threshold velocity.
 
     Returns
     -------
@@ -149,10 +149,16 @@ def generate_dust_flux_map(
         The final calculated vertical dust flux.
     """
     # 1. Feature Prep (Physics)
-    R, H = _prepare_physical_features(ds_alb, ds_lai, ds_lc, ds_soil, ds_met)
+    R, H = _prepare_physical_features(
+        ds_soil,
+        ds_met,
+        ds_drag,
+    )
 
     # 2. Predict u*t (Machine Learning)
-    u_thresh = predict_threshold_velocity(model, ds_soil, R, H, ds_lai["Lai"])
+    # Note: Use the variable name from the dataset.
+    lai_val = ds_lai["Lai"] if "Lai" in ds_lai else ds_lai["LAI"]
+    u_thresh = predict_threshold_velocity(model, ds_soil, R, H, lai_val)
 
     # 3. Flux Calculation (Physics)
     u_eff = (ds_met["ustar"] * R) / H

@@ -9,9 +9,13 @@ from datetime import datetime
 from typing import Any, TypeAlias
 
 import aiohttp
+import logging
 import rasterio
 import s3fs
 import xarray as xr
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 # --- TYPE HINTS ---
 # A mapping from a soil variable name (e.g., 'clay') to its fetched value.
@@ -74,21 +78,26 @@ class AsyncDustDataEngine:
         """
         bucket = "noaa-ufs-gefsv13replay-pds"
         path = f"s3://{bucket}/{dt.strftime('%Y%m%d/%H')}/atmos/gefs.t{dt.strftime('%H')}z.pgrb2.0p25.f000"
+        logger.info(f"Fetching UFS met data from S3: {path}...")
 
         def _blocking_open_and_select(file_obj: Any) -> xr.Dataset:
             """Helper function to run blocking I/O in a thread."""
             # Use xr.open_dataset within a with-statement to ensure file is closed
+            logger.debug("Opening GRIB2 file with cfgrib engine...")
             ds = xr.open_dataset(
                 file_obj,
                 engine="cfgrib",
                 backend_kwargs={"filter_by_keys": {"typeOfLevel": "surface"}},
             )
+            logger.debug(f"Selecting nearest grid point for ({lat}, {lon})...")
             return ds.sel(latitude=lat, longitude=lon, method="nearest")
 
         # s3fs.S3FileSystem.open is a coroutine if asynchronous=True
         async with self.fs_s3.open(path) as f:
             # xarray's open_dataset is blocking, so we run it in a thread
-            return await asyncio.to_thread(_blocking_open_and_select, f)
+            ds_result = await asyncio.to_thread(_blocking_open_and_select, f)
+            logger.info("Successfully retrieved UFS meteorological data.")
+            return ds_result
 
     async def _fetch_soil_variable(
         self, variable: str, lat: float, lon: float
@@ -126,9 +135,11 @@ class AsyncDustDataEngine:
             "HEIGHT": 1,
             "FORMAT": "image/tiff",
         }
+        logger.debug(f"Requesting SoilGrids WCS for {variable}...")
         async with self.http.get(self.wcs_url, params=params) as resp:
             resp.raise_for_status()
             tiff_bytes = await resp.read()
+            logger.debug(f"Received {len(tiff_bytes)} bytes for {variable}.")
 
             def _blocking_read_raster(data: bytes) -> float:
                 """Helper function to run blocking rasterio in a thread."""
@@ -137,6 +148,7 @@ class AsyncDustDataEngine:
 
             # rasterio is blocking, run in thread
             value = await asyncio.to_thread(_blocking_read_raster, tiff_bytes)
+            logger.debug(f"Soil property {variable} = {value}")
             return variable, value
 
     async def fetch_soilgrids_concurrently(self, lat: float, lon: float) -> SoilResult:

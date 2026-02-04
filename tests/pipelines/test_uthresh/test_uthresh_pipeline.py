@@ -27,8 +27,14 @@ def mock_geo_data() -> dict:
 
 
 @pytest.fixture
-def mock_albedo_data(mock_geo_data: dict) -> xr.Dataset:
-    """Creates a mock albedo dataset."""
+def mock_brdf_data(mock_geo_data: dict) -> xr.Dataset:
+    """Creates a mock BRDF dataset."""
+    return xr.Dataset(coords=mock_geo_data["coords"])
+
+
+@pytest.fixture
+def mock_nbar_data(mock_geo_data: dict) -> xr.Dataset:
+    """Creates a mock NBAR dataset."""
     return xr.Dataset(coords=mock_geo_data["coords"])
 
 
@@ -68,8 +74,19 @@ def mock_met_data(mock_geo_data: dict) -> xr.Dataset:
     return ds
 
 
+@pytest.fixture
+def mock_drag_data(mock_geo_data: dict) -> xr.Dataset:
+    """Creates a mock drag partition dataset."""
+    ds = xr.Dataset(coords=mock_geo_data["coords"])
+    ds["feff"] = xr.DataArray(np.full((10, 10), 0.05), dims=mock_geo_data["dims"])
+    return ds
+
+
 def test_generate_dust_flux_map_orchestration(
-    mock_albedo_data, mock_lai_data, mock_lc_data, mock_soil_data, mock_met_data
+    mock_drag_data,
+    mock_lai_data,
+    mock_soil_data,
+    mock_met_data,
 ):
     """
     Tests the end-to-end orchestration of the `generate_dust_flux_map` function.
@@ -80,9 +97,6 @@ def test_generate_dust_flux_map_orchestration(
     # Mock the functions from the algorithm module that are called by the pipeline
     with (
         patch(
-            "fengsha_prep.pipelines.uthresh.pipeline.compute_hybrid_drag_partition"
-        ) as mock_drag,
-        patch(
             "fengsha_prep.pipelines.uthresh.pipeline.compute_moisture_inhibition"
         ) as mock_moisture,
         patch(
@@ -90,22 +104,19 @@ def test_generate_dust_flux_map_orchestration(
         ) as mock_predict,
     ):
         # Define the return values for the mocked algorithm functions
-        mock_drag.return_value = xr.DataArray(0.05)
         mock_moisture.return_value = xr.DataArray(1.2)
         mock_predict.return_value = xr.DataArray(0.35)
 
         # Execute the pipeline function
         result = generate_dust_flux_map(
-            ds_alb=mock_albedo_data,
+            model=mock_model,
+            ds_drag=mock_drag_data,
             ds_lai=mock_lai_data,
-            ds_lc=mock_lc_data,
             ds_soil=mock_soil_data,
             ds_met=mock_met_data,
-            model=mock_model,
         )
 
         # Assert that the algorithm functions were called with the correct data
-        mock_drag.assert_called_once()
         mock_moisture.assert_called_once()
         mock_predict.assert_called_once()
 

@@ -33,14 +33,27 @@ def mock_geo_data() -> dict:
 
 
 @pytest.fixture
-def mock_albedo_data(mock_geo_data: dict) -> xr.Dataset:
-    """Creates a mock albedo dataset."""
+def mock_brdf_data(mock_geo_data: dict) -> xr.Dataset:
+    """Creates a mock BRDF dataset."""
     ds = xr.Dataset(coords=mock_geo_data["coords"])
-    ds["Albedo_BSW_Band1"] = xr.DataArray(
-        np.full((10, 10), 0.15), dims=mock_geo_data["dims"]
-    )
     ds["BRDF_Albedo_Parameter_Isotropic_Band1"] = xr.DataArray(
         np.full((10, 10), 0.30), dims=mock_geo_data["dims"]
+    )
+    ds["BRDF_Albedo_Parameter_Volumetric_Band1"] = xr.DataArray(
+        np.full((10, 10), 0.1), dims=mock_geo_data["dims"]
+    )
+    ds["BRDF_Albedo_Parameter_Geometric_Band1"] = xr.DataArray(
+        np.full((10, 10), 0.05), dims=mock_geo_data["dims"]
+    )
+    return ds
+
+
+@pytest.fixture
+def mock_nbar_data(mock_geo_data: dict) -> xr.Dataset:
+    """Creates a mock NBAR dataset."""
+    ds = xr.Dataset(coords=mock_geo_data["coords"])
+    ds["Nadir_Reflectance_Band1"] = xr.DataArray(
+        np.full((10, 10), 0.15), dims=mock_geo_data["dims"]
     )
     return ds
 
@@ -66,10 +79,12 @@ def mock_training_dataframe() -> pd.DataFrame:
 # --- Unit Tests for Algorithms ---
 
 
-def test_compute_hybrid_drag_partition(mock_albedo_data, mock_lai_data):
+def test_compute_hybrid_drag_partition(mock_brdf_data, mock_lai_data):
     """Tests the drag partition physics calculation."""
     igbp_class = 7  # Open Shrublands
-    result = compute_hybrid_drag_partition(mock_albedo_data, mock_lai_data, igbp_class)
+    result = compute_hybrid_drag_partition(
+        mock_brdf_data, mock_lai_data, igbp_class, ds_nbar=None
+    )
 
     assert isinstance(result, xr.DataArray)
     assert not np.isnan(result).any()

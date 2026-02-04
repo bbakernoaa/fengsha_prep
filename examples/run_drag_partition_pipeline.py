@@ -1,6 +1,6 @@
 import logging
-
 import earthaccess
+from dask.distributed import Client
 
 from fengsha_prep.pipelines.drag_partition.pipeline import run_drag_partition_pipeline
 
@@ -10,6 +10,15 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
+
+# --- DASK CLIENT INITIALIZATION ---
+# Using a Dask client helps parallelize data fetching and computation,
+# which is especially helpful for the high-resolution NESDIS datasets.
+try:
+    client = Client(n_workers=4, threads_per_worker=2, memory_limit='4GB')
+    logging.info(f"Dask Dashboard available at: {client.dashboard_link}")
+except Exception as e:
+    logging.warning(f"Failed to start Dask client: {e}. Performance may be degraded.")
 
 # --- AUTHENTICATION ---
 # This will prompt for your Earthdata credentials if not found in
