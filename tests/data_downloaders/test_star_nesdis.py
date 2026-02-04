@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -36,6 +37,7 @@ async def test_fetch_star_nesdis_file_list():
         assert "https://example.com/data/file1.nc" in file_list
         assert "https://example.com/data/file2.nc" in file_list
 
+
 def test_load_and_regrid_star_nesdis_data(tmp_path):
     rows, cols = 100, 200
     data = np.random.rand(rows, cols).astype(np.float64)
@@ -48,6 +50,7 @@ def test_load_and_regrid_star_nesdis_data(tmp_path):
     assert "x" in ds_regridded.dims
     assert "y" in ds_regridded.dims
     assert ds_regridded.BRDF_QC.dtype == np.float32
+
 
 @pytest.mark.asyncio
 async def test_process_star_nesdis_data(tmp_path):
@@ -63,9 +66,7 @@ async def test_process_star_nesdis_data(tmp_path):
 
     target = "fengsha_prep.data_downloaders.star_nesdis.download_file"
     with patch(target, side_effect=mock_download):
-        result = await process_star_nesdis_data(
-            url, output_path, target_resolution=1.0
-        )
+        result = await process_star_nesdis_data(url, output_path, target_resolution=1.0)
 
         assert result == output_path
         assert output_path.exists()
@@ -76,4 +77,4 @@ async def test_process_star_nesdis_data(tmp_path):
 
         # Verify cleanup (the temp file name depends on the URL)
         temp_file = Path("temp_test.nc")
-        assert not temp_file.exists()
+        assert not await asyncio.to_thread(temp_file.exists)

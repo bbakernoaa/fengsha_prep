@@ -40,7 +40,7 @@ async def _download_file(
         async with session.get(url) as response:
             response.raise_for_status()
             content = await response.read()
-            filepath.write_bytes(content)
+            await asyncio.to_thread(filepath.write_bytes, content)
             logger.info(f"Download complete: {filepath}")
             return filepath
     except aiohttp.ClientError as e:
@@ -67,7 +67,7 @@ async def _download_files_concurrently(
     if not urls:
         return []
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
     semaphore = asyncio.Semaphore(concurrency_limit)
     tasks = []
 

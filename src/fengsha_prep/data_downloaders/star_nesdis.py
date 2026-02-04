@@ -64,7 +64,7 @@ async def download_file(
         async with session.get(url) as response:
             response.raise_for_status()
             content = await response.read()
-            filepath.write_bytes(content)
+            await asyncio.to_thread(filepath.write_bytes, content)
             logger.info(f"Download complete: {filepath}")
             return filepath
     except aiohttp.ClientError as e:
@@ -92,7 +92,7 @@ async def download_star_nesdis_files(
     if not urls:
         return []
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
     semaphore = asyncio.Semaphore(concurrency_limit)
     tasks = []
 
@@ -147,9 +147,7 @@ def load_and_regrid_star_nesdis_data(
 
         # Centers of pixels, assuming global coverage
         lat = np.linspace(90 - (180 / n_rows) / 2, -90 + (180 / n_rows) / 2, n_rows)
-        lon = np.linspace(
-            -180 + (360 / n_cols) / 2, 180 - (360 / n_cols) / 2, n_cols
-        )
+        lon = np.linspace(-180 + (360 / n_cols) / 2, 180 - (360 / n_cols) / 2, n_cols)
 
         ds = ds.assign_coords(row=lat, column=lon)
         ds = ds.rename({"row": "lat", "column": "lon"})
@@ -208,6 +206,6 @@ async def process_star_nesdis_data(
         return output_path
     finally:
         # 4. Cleanup
-        if temp_file.exists():
-            os.remove(temp_file)
+        if await asyncio.to_thread(temp_file.exists):
+            await asyncio.to_thread(os.remove, temp_file)
             logger.info(f"Cleaned up temporary file {temp_file}")
