@@ -127,9 +127,8 @@ def prepare_balanced_training(df: pd.DataFrame) -> pd.DataFrame:
         df["clay"], bins=[0, 15, 30, 100], labels=["Sand", "Loam", "Clay"]
     )
     # Sample equally across land-use/soil combinations
-    return df.groupby(["igbp", "texture"], group_keys=False).apply(
-        lambda x: x.sample(min(len(x), 300))
-    )
+    groups = df.groupby(["igbp", "texture"], group_keys=False)
+    return pd.concat([g.sample(min(len(g), 300)) for _, g in groups])
 
 
 def train_piml_model(df: pd.DataFrame) -> XGBRegressor:
