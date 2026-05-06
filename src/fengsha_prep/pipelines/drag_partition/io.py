@@ -9,11 +9,13 @@ import os
 from datetime import datetime, timedelta
 import re
 import logging
+import warnings
+import h5py
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
-Sensor = Literal["MODIS", "VIIRS", "NESDIS"]
+Sensor = Literal["MODIS", "VNP", "VJ1", "NESDIS"]
 
 PRODUCT_MAP = {
     "MODIS": {
@@ -22,11 +24,19 @@ PRODUCT_MAP = {
         "nbar": "MCD43C4",
         "lai": "MCD15A2H",
     },
-    "VIIRS": {
+    "VNP": {
+        "brdf": "VNP43C1",
+        "albedo": "VNP43C3",
+        "nbar": "VNP43C4",
+        "lai": "VNP15A2H",
+        "ndvi": "VNP13C1",
+    },
+    "VJ1": {
         "brdf": "VJ143C1",
         "albedo": "VJ143C3",
         "nbar": "VJ143C4",
         "lai": "VNP15A2H",
+        "ndvi": "VJ113C1",
     },
 }
 
@@ -38,7 +48,7 @@ NESDIS_PRODUCTS = {
 
 
 def get_nesdis_data(
-    product_type: str, start_date: str, end_date: str, optional: bool = False
+    product_type: str, start_date: str, end_date: str, optional: bool = False, cache_dir: str | None = None
 ) -> xr.Dataset | None:
     """Retrieves NESDIS 4km grid data from AWS S3.
 
@@ -92,9 +102,12 @@ def get_nesdis_data(
     # To keep it simple and match the 4km readiness requirement:
     remote_path = files[0]
     local_filename = os.path.basename(remote_path)
-    cache_dir = os.path.join(os.getcwd(), "data", "nesdis")
-    os.makedirs(cache_dir, exist_ok=True)
-    local_path = os.path.join(cache_dir, local_filename)
+    if cache_dir is None:
+        nesdis_cache_dir = os.path.join(os.getcwd(), "data", "nesdis")
+    else:
+        nesdis_cache_dir = cache_dir
+    os.makedirs(nesdis_cache_dir, exist_ok=True)
+    local_path = os.path.join(nesdis_cache_dir, local_filename)
 
     if not os.path.exists(local_path):
         logger.info(f"Downloading NESDIS file: s3://{remote_path} to {local_path}")
@@ -106,7 +119,7 @@ def get_nesdis_data(
     # We open with chunks='auto' first to handle varying dimension names (lat/latitude).
     ds = xr.open_dataset(
         local_path,
-        engine="h5netcdf",
+        engine="netcdf4",
         chunks="auto"
     )
 
@@ -117,16 +130,16 @@ def get_nesdis_data(
     target_lon = np.linspace(-179.975, 179.975, 7200)
 
     rename_dict = {}
-    if "latitude" in ds.dims: rename_dict["latitude"] = "lat"
-    elif "y" in ds.dims: rename_dict["y"] = "lat"
+    if "latitude" in ds.sizes: rename_dict["latitude"] = "lat"
+    elif "y" in ds.sizes: rename_dict["y"] = "lat"
 
-    if "longitude" in ds.dims: rename_dict["longitude"] = "lon"
-    elif "x" in ds.dims: rename_dict["x"] = "lon"
+    if "longitude" in ds.sizes: rename_dict["longitude"] = "lon"
+    elif "x" in ds.sizes: rename_dict["x"] = "lon"
 
     if rename_dict:
         # Drop conflicting coords
         for new_name in rename_dict.values():
-            if new_name in ds.coords and new_name not in ds.dims:
+            if new_name in ds.coords and new_name not in ds.sizes:
                 ds = ds.drop_vars(new_name)
         ds = ds.rename(rename_dict)
 
@@ -135,16 +148,16 @@ def get_nesdis_data(
 
     # If coordinates are missing or different size, assign them before interp
     # Using accurate pixel centers for global rectilinear grids
-    if "lat" in ds.dims and ( "lat" not in ds.coords or ds.lat.size != ds.dims["lat"] ):
-        res_lat = 180.0 / ds.dims["lat"]
+    if "lat" in ds.sizes and ( "lat" not in ds.coords or ds.lat.size != ds.sizes["lat"] ):
+        res_lat = 180.0 / ds.sizes["lat"]
         logger.debug(f"Assigning lat coords with resolution {res_lat}")
-        ds = ds.assign_coords(lat=np.linspace(90.0 - res_lat/2, -90.0 + res_lat/2, ds.dims["lat"]))
-    if "lon" in ds.dims and ( "lon" not in ds.coords or ds.lon.size != ds.dims["lon"] ):
-        res_lon = 360.0 / ds.dims["lon"]
+        ds = ds.assign_coords(lat=np.linspace(90.0 - res_lat/2, -90.0 + res_lat/2, ds.sizes["lat"]))
+    if "lon" in ds.sizes and ( "lon" not in ds.coords or ds.lon.size != ds.sizes["lon"] ):
+        res_lon = 360.0 / ds.sizes["lon"]
         logger.debug(f"Assigning lon coords with resolution {res_lon}")
-        ds = ds.assign_coords(lon=np.linspace(-180.0 + res_lon/2, 180.0 - res_lon/2, ds.dims["lon"]))
+        ds = ds.assign_coords(lon=np.linspace(-180.0 + res_lon/2, 180.0 - res_lon/2, ds.sizes["lon"]))
 
-    logger.info(f"Interpolating NESDIS {product} from {ds.dims['lat']}x{ds.dims['lon']} to 3600x7200...")
+    logger.info(f"Interpolating NESDIS {product} from {ds.sizes['lat']}x{ds.sizes['lon']} to 3600x7200...")
     ds = ds.interp(lat=target_lat, lon=target_lon, method="nearest")
 
     # Add time dimension to align with NASA CMG datasets
@@ -154,24 +167,58 @@ def get_nesdis_data(
     return ds
 
 
+_EARTHDATA_LOGGED_IN = False
+
+def _ensure_earthdata_login():
+    """Ensures that we are logged into Earthdata.
+    
+    This is especially important for Dask workers which may not share 
+    the session state of the local process. Uses a global flag to 
+    minimize redundant calls within the same process.
+    """
+    global _EARTHDATA_LOGGED_IN
+    if _EARTHDATA_LOGGED_IN:
+        return True
+        
+    try:
+        # Try to login non-interactively first (for workers)
+        auth = earthaccess.login(persist=True)
+        if auth:
+            _EARTHDATA_LOGGED_IN = True
+            return True
+    except Exception as e:
+        logger.debug(f"Non-interactive login attempt failed: {e}")
+        
+    # Final fallback attempt
+    auth = earthaccess.login()
+    if auth:
+        _EARTHDATA_LOGGED_IN = True
+        return True
+        
+    logger.warning("Earthdata login failed. Downloads may fail if not already authenticated via environment or netrc.")
+    return False
+
+
 def get_cmg_data(
-    product_type: str, start_date: str, end_date: str, sensor: Sensor = "MODIS", optional: bool = False
+    product_type: str, start_date: str, end_date: str, sensor: Sensor = "MODIS", optional: bool = False, cache_dir: str | None = None
 ) -> xr.Dataset | None:
-    """Retrieves MODIS, VIIRS, or NESDIS CMG data.
+    """Retrieves MODIS, VNP, VJ1, or NESDIS CMG data.
 
     Parameters
     ----------
     product_type : str
-        The type of product to retrieve (e.g., "albedo", "lai", "gvf").
+        The type of product to retrieve (e.g., "albedo", "lai", "gvf", "ndvi").
     start_date : str
         The start date for the data search in 'YYYY-MM-DD' format.
     end_date : str
         The end date for the data search in 'YYYY-MM-DD' format.
     sensor : Sensor, optional
-        The sensor/source to use ('MODIS', 'VIIRS', or 'NESDIS'). Defaults to 'MODIS'.
+        The sensor/source to use ('MODIS', 'VNP', 'VJ1', or 'NESDIS'). Defaults to 'MODIS'.
     optional : bool, optional
         If True, return None if no data is found instead of raising an error.
         Defaults to False.
+    cache_dir : str, optional
+        Directory to store downloaded files. Defaults to 'data/nasa' or 'data/nesdis'.
 
     Returns
     -------
@@ -181,10 +228,10 @@ def get_cmg_data(
     """
     if sensor == "NESDIS":
         if product_type in ["brdf", "nbar", "albedo"]:
-            # NESDIS doesn't have required BRDF/NBAR parameters, use NASA VIIRS
-            sensor = "VIIRS"
+            # NESDIS doesn't have required BRDF/NBAR parameters, use NASA VIIRS (VJ1)
+            sensor = "VJ1"
         else:
-            return get_nesdis_data(product_type, start_date, end_date, optional=optional)
+            return get_nesdis_data(product_type, start_date, end_date, optional=optional, cache_dir=cache_dir)
 
     short_name = PRODUCT_MAP[sensor][product_type]
     logger.info(f"Searching Earthdata for {short_name} ({sensor}) from {start_date} to {end_date}...")
@@ -218,11 +265,27 @@ def get_cmg_data(
     extension = os.path.splitext(r1.data_links()[0])[1]
 
     # Download files instead of streaming to improve stability and performance
-    nasa_cache_dir = os.path.join(os.getcwd(), "data", "nasa")
+    if cache_dir is None:
+        nasa_cache_dir = os.path.join(os.getcwd(), "data", "nasa")
+    else:
+        nasa_cache_dir = cache_dir
     os.makedirs(nasa_cache_dir, exist_ok=True)
 
-    logger.info(f"Downloading {len(results)} NASA granules to {nasa_cache_dir}...")
-    local_files = earthaccess.download(results, nasa_cache_dir)
+    # Ensure we are logged in before downloading (crucial for Dask workers)
+    _ensure_earthdata_login()
+
+    logger.info(f"Downloading {len(results)} NASA granules to {nasa_cache_dir} (sequential)...")
+    # Set threads=1 to disable parallel downloading, which can cause auth/instability issues.
+    local_files = earthaccess.download(results, nasa_cache_dir, threads=1)
+
+    # Filter out empty or non-existent files
+    local_files = [f for f in local_files if f and os.path.exists(f) and os.path.getsize(f) > 0]
+
+    if not local_files:
+        if optional:
+            logger.warning(f"Download failed for {short_name} or no files returned. Returning None.")
+            return None
+        raise FileNotFoundError(f"Failed to download any valid files for {short_name} to {nasa_cache_dir}.")
 
     logger.info(f"Opening {len(local_files)} local files (type: {extension})...")
     if extension in [".hdf", ".h4"]:
@@ -237,47 +300,103 @@ def get_cmg_data(
         )
         return ds
 
-    elif sensor == "VIIRS":
-        if "VNP43" in short_name or "VJ143" in short_name:
-            # Primary group for NASA VIIRS CMG products is often BRDF regardless of sub-product.
-            # We try common candidates and re-open fileobjects for each attempt.
-            groups = ["/HDFEOS/GRIDS/VIIRS_CMG_BRDF/Data Fields"]
-            if "C4" in short_name:
-                groups.insert(0, "/HDFEOS/GRIDS/VIIRS_CMG_NBAR/Data Fields")
-            elif "C3" in short_name:
-                groups.insert(0, "/HDFEOS/GRIDS/VIIRS_CMG_Albedo/Data Fields")
-
-            groups = list(dict.fromkeys(groups))
-
-            last_err = None
-            for group in groups:
+    elif sensor in ["VNP", "VJ1"]:
+        if any(x in short_name for x in ["VNP43", "VJ143", "VNP13", "VJ11", "VNP15"]):
+            # For NASA VIIRS CMG products, the group name can vary.
+            # We probe the first file to find the correct HDFEOS group.
+            def find_group(filename):
                 try:
-                    logger.info(f"Attempting to open VIIRS CMG with group: {group}")
+                    with h5py.File(filename, "r") as f:
+                        if "HDFEOS" in f and "GRIDS" in f["HDFEOS"]:
+                            grids = f["HDFEOS/GRIDS"]
+                            for grid_name in grids.keys():
+                                group_path = f"/HDFEOS/GRIDS/{grid_name}/Data Fields"
+                                if group_path in f:
+                                    return group_path
+                except Exception as e:
+                    logger.warning(f"Failed to probe HDFEOS group in {filename}: {e}")
+                return None
+
+            group = find_group(local_files[0])
+            if not group:
+                logger.warning(f"Could not automatically find HDFEOS group in {local_files[0]}. Falling back to defaults.")
+                group = "/HDFEOS/GRIDS/VIIRS_CMG_BRDF/Data Fields"
+                if "C4" in short_name: group = "/HDFEOS/GRIDS/VIIRS_CMG_NBAR/Data Fields"
+                elif "C3" in short_name: group = "/HDFEOS/GRIDS/VIIRS_CMG_Albedo/Data Fields"
+                elif "13C1" in short_name: group = "/HDFEOS/GRIDS/VIIRS_CMG_VegIndices/Data Fields"
+
+            logger.info(f"Opening VIIRS CMG with group: {group} (engine: h5netcdf)")
+            
+            # Use h5netcdf engine with phony_dims='sort' for better stability and coordinate alignment.
+            # We disable parallel=True here to avoid malloc/segfault issues on certain systems 
+            # with HDF5/netCDF4 C library interactions.
+            try:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", message=".*multiple fill values.*")
                     ds = xr.open_mfdataset(
                         local_files,
                         combine="by_coords",
                         preprocess=_preprocess_vnp43,
                         group=group,
-                        parallel=True,
+                        parallel=False,
+                        engine="h5netcdf",
+                        backend_kwargs={"phony_dims": "sort"},
                         chunks={"lat": 1800, "lon": 3600},
                     )
-                    logger.info(f"Successfully opened with group: {group}")
-                    return ds
-                except (OSError, KeyError, ValueError) as e:
-                    logger.debug(f"Failed to open with group {group}: {e}")
-                    last_err = e
-                    continue
+                
+                # DIAGNOSTIC: Log all available variables before filtering
+                logger.info(f"Available variables in {product_type} ({group}): {list(ds.data_vars)}")
 
-            if last_err:
-                logger.error(f"Failed to open VIIRS CMG after trying all groups: {groups}")
-                raise last_err
+                # Filter to only necessary variables based on product type
+                keep_vars = []
+                if product_type == "ndvi":
+                    keep_vars = ["NDVI", "pixel_reliability"]
+                elif product_type == "brdf":
+                    # NASA VIIRS BRDF parameters often use "Parameter" in the name
+                    keep_vars = ["Isotropic", "Geometric", "Volumetric", "Parameter1", "Parameter2", "Parameter3", "Percent_Snow"]
+                elif product_type == "nbar":
+                    keep_vars = ["Nadir", "NBAR"]
+                elif product_type == "albedo":
+                    keep_vars = ["Albedo", "BSA", "WSA", "Percent_Snow"]
+
+                if keep_vars:
+                    # Match variables exactly if possible, or by substring
+                    actual_vars = []
+                    for v in ds.data_vars:
+                        v_low = v.lower()
+                        # Case-insensitive substring match for any of the keep_vars
+                        if any(k.lower() in v_low for k in keep_vars):
+                            # For VIIRS BRDF/NBAR/Albedo, strictly enforce M7 band if multiple bands are present
+                            if product_type in ["brdf", "nbar", "albedo"] and sensor in ["VNP", "VJ1"]:
+                                if "m" in v_low and "m7" not in v_low:
+                                    continue
+                            actual_vars.append(v)
+                    
+                    if actual_vars:
+                        ds = ds[actual_vars]
+                        logger.debug(f"Reduced {product_type} dataset to variables: {list(ds.data_vars)}")
+                    else:
+                        logger.warning(f"No variables matched keep_vars {keep_vars} (filtering for M7 if VIIRS). Keeping ALL variables.")
+
+                return ds
+            except Exception as e:
+                logger.error(f"Failed to open VIIRS CMG with h5netcdf: {e}. Retrying with default engine...")
+                # Last resort fallback with minimal features
+                return xr.open_mfdataset(
+                    local_files,
+                    combine="by_coords",
+                    preprocess=_preprocess_vnp43,
+                    group=group,
+                    parallel=False,
+                    chunks={"lat": 1800, "lon": 3600},
+                )
 
     logger.debug("Opening files with default concat engine.")
     ds = xr.open_mfdataset(
         local_files,
         combine="by_coords",
         preprocess=lambda ds: ds.sortby("time"),
-        parallel=True,
+        parallel=False,
         chunks={"lat": 1800, "lon": 3600},
     )
     return ds
@@ -303,7 +422,7 @@ def _preprocess_vnp43(ds: xr.Dataset) -> xr.Dataset:
 
     # 1. Standardize dimensions to 'lat' and 'lon'
     rename_map = {}
-    for d, s in ds.dims.items():
+    for d, s in ds.sizes.items():
         if d in ["phony_dim_0", "y"] or (s == 3600 and d != "lat"):
             rename_map[d] = "lat"
         if d in ["phony_dim_1", "x"] or (s == 7200 and d != "lon"):
@@ -313,15 +432,15 @@ def _preprocess_vnp43(ds: xr.Dataset) -> xr.Dataset:
         logger.debug(f"Renaming dimensions: {rename_map}")
         # Avoid naming conflicts with existing coords
         for v in ["lat", "lon"]:
-            if v in ds.coords and v not in ds.dims:
+            if v in ds.coords and v not in ds.sizes:
                 ds = ds.drop_vars(v)
         ds = ds.rename(rename_map)
 
     # 2. Reconstruct/Ensure coordinates are correctly indexed
     # Even if they have the right size, we must assign values so interp/merge works cleanly.
-    if "lat" in ds.dims and "lon" in ds.dims:
-        curr_nlat = ds.dims["lat"]
-        curr_nlon = ds.dims["lon"]
+    if "lat" in ds.sizes and "lon" in ds.sizes:
+        curr_nlat = ds.sizes["lat"]
+        curr_nlon = ds.sizes["lon"]
 
         # Assign best-guess coordinates based on current size if they don't look like degrees
         if "lat" not in ds.coords or ds.coords["lat"].max() < 1: # Guessing indices
@@ -345,5 +464,48 @@ def _preprocess_vnp43(ds: xr.Dataset) -> xr.Dataset:
         ds = ds.expand_dims("time")
         ds = ds.assign_coords(time=[time_val])
         logger.debug(f"Set time coordinate to {time_val}")
+
+    # 4. Standardize variable names (remove long descriptive prefixes)
+    new_data_vars = {}
+    for v in ds.data_vars:
+        new_name = None
+        if "std dev" in v.lower():
+            continue
+            
+        v_low = v.lower()
+        if "ndvi" in v_low: 
+            new_name = "NDVI"
+        elif "evi2" in v_low: 
+            new_name = "EVI2"
+        elif "evi" in v_low: 
+            new_name = "EVI"
+        elif "pixel reliability" in v_low: 
+            new_name = "pixel_reliability"
+        elif "parameter1" in v_low or "isotropic" in v_low:
+             # Extract band if present (e.g. M5, Band1, nir, vis)
+             band_match = re.search(r"_(M\d+|Band\d+|nir|vis|shortwave)$", v_low)
+             suffix = f"_{band_match.group(1)}" if band_match else ""
+             new_name = f"Isotropic{suffix}"
+        elif "parameter2" in v_low or "volumetric" in v_low:
+             band_match = re.search(r"_(M\d+|Band\d+|nir|vis|shortwave)$", v_low)
+             suffix = f"_{band_match.group(1)}" if band_match else ""
+             new_name = f"Volumetric{suffix}"
+        elif "parameter3" in v_low or "geometric" in v_low:
+             band_match = re.search(r"_(M\d+|Band\d+|nir|vis|shortwave)$", v_low)
+             suffix = f"_{band_match.group(1)}" if band_match else ""
+             new_name = f"Geometric{suffix}"
+        elif "percent_snow" in v_low:
+             new_name = "Percent_Snow"
+        
+        if new_name and new_name != v:
+            # Check for name collisions with variables, coordinates, or newly assigned names
+            if new_name in ds.variables or new_name in new_data_vars.values():
+                logger.warning(f"Name collision for '{new_name}'. Keeping original name '{v}'.")
+            else:
+                logger.debug(f"Renaming variable '{v}' to '{new_name}'")
+                new_data_vars[v] = new_name
+            
+    if new_data_vars:
+        ds = ds.rename(new_data_vars)
 
     return ds

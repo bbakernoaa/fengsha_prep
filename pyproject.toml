@@ -23,6 +23,8 @@ dependencies = [
     "earthaccess",
     "xgboost",
     "rioxarray",
+    "h5netcdf",
+    "h5py",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",

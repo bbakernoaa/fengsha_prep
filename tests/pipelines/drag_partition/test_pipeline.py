@@ -13,6 +13,7 @@ def mock_data_fetcher():
     dummy_ds = xr.Dataset(
         {
             "BRDF_Albedo_Parameter_Isotropic_Band1": (("y", "x"), [[0.2]]),
+            "BRDF_Albedo_Parameter_Geometric_Band2": (("y", "x"), [[0.05]]),
             "BRDF_Albedo_Parameter_Isotropic_Band6": (("y", "x"), [[0.3]]),
             "BRDF_Albedo_Parameter_Isotropic_Band7": (("y", "x"), [[0.1]]),
             "Nadir_Reflectance_Band1": (("y", "x"), [[0.15]]),
@@ -38,19 +39,19 @@ def test_run_drag_partition_pipeline_integration_modis(mock_data_fetcher):
     mock_data_fetcher.assert_any_call("lai", start_date, end_date, "MODIS")
 
 
-def test_run_drag_partition_pipeline_integration_viirs(mock_data_fetcher):
-    """Integration test for the drag partition pipeline with VIIRS sensor."""
+def test_run_drag_partition_pipeline_integration_vnp(mock_data_fetcher):
+    """Integration test for the drag partition pipeline with VNP sensor."""
     start_date = "2024-01-01"
     end_date = "2024-01-07"
     run_drag_partition_pipeline(
-        start_date, end_date, sensor="VIIRS", data_fetcher=mock_data_fetcher
+        start_date, end_date, sensor="VNP", data_fetcher=mock_data_fetcher
     )
 
-    # Assert that the data_fetcher was called three times (brdf, nbar, lai)
-    assert mock_data_fetcher.call_count == 3
-    mock_data_fetcher.assert_any_call("brdf", start_date, end_date, "VIIRS")
-    mock_data_fetcher.assert_any_call("nbar", start_date, end_date, "VIIRS")
-    mock_data_fetcher.assert_any_call("lai", start_date, end_date, "VIIRS")
+    # Assert that the data_fetcher was called correctly
+    mock_data_fetcher.assert_any_call("brdf", start_date, end_date, "VNP", False)
+    mock_data_fetcher.assert_any_call("nbar", start_date, end_date, "VNP", True)
+    mock_data_fetcher.assert_any_call("lai", start_date, end_date, "VNP", True)
+    mock_data_fetcher.assert_any_call("ndvi", start_date, end_date, "VNP", True)
 
 
 def test_run_drag_partition_pipeline_integration_nesdis(mock_data_fetcher):
