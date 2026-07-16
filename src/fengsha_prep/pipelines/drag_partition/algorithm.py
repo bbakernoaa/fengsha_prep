@@ -353,7 +353,16 @@ def calculate_drag_partition(
         feff = feff.where(ndvi > 0)
 
     # Create output dataset — skip None variables to avoid object-dtype write errors
-    data_vars = {k: v for k, v in {"feff": feff, "ndvi": ndvi}.items() if v is not None}
+    data_vars = {
+        k: v for k, v in {
+            "feff": feff,
+            "ndvi": ndvi,
+            "f_iso": f_iso,
+            "f_geo": f_geo,
+            "lam": lam,
+            "ra_bare": ra_bare,
+        }.items() if v is not None
+    }
     ds_out = xr.Dataset(data_vars=data_vars)
 
     if time_coords is not None:
@@ -362,6 +371,30 @@ def calculate_drag_partition(
     if "feff" in ds_out:
         ds_out.feff.attrs.update({
             "long_name": "Total Effective Drag Coefficient",
+            "units": "dimensionless",
+        })
+
+    if "f_iso" in ds_out:
+        ds_out.f_iso.attrs.update({
+            "long_name": "Isotropic Scattering Parameter",
+            "units": "dimensionless",
+        })
+
+    if "f_geo" in ds_out:
+        ds_out.f_geo.attrs.update({
+            "long_name": "Geometric Scattering Parameter",
+            "units": "dimensionless",
+        })
+
+    if "lam" in ds_out:
+        ds_out.lam.attrs.update({
+            "long_name": "Frontal Area Index (lambda)",
+            "units": "dimensionless",
+        })
+
+    if "ra_bare" in ds_out:
+        ds_out.ra_bare.attrs.update({
+            "long_name": "Bare Soil Shear Stress Ratio",
             "units": "dimensionless",
         })
 
