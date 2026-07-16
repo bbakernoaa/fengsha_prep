@@ -11,6 +11,8 @@ import re
 import logging
 import warnings
 import h5py
+from pathlib import Path
+import json
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -353,7 +355,18 @@ def get_cmg_data(
                     keep_vars = ["NDVI", "pixel_reliability"]
                 elif product_type == "brdf":
                     # NASA VIIRS BRDF parameters often use "Parameter" in the name
-                    keep_vars = ["Isotropic", "Geometric", "Volumetric", "Parameter1", "Parameter2", "Parameter3", "Percent_Snow"]
+                    keep_vars = [
+                        "Isotropic",
+                        "Geometric",
+                        "Volumetric",
+                        "Parameter1",
+                        "Parameter2",
+                        "Parameter3",
+                        "Percent_Snow",
+                        "LandWater",
+                        "Land_Water",
+                        "Land Water",
+                    ]
                 elif product_type == "nbar":
                     keep_vars = ["Nadir", "NBAR"]
                 elif product_type == "albedo":
@@ -400,6 +413,224 @@ def get_cmg_data(
         chunks={"lat": 1800, "lon": 3600},
     )
     return ds
+
+
+def build_earthaccess_virtual_refs(
+    product_type: str,
+    start_date: str,
+    end_date: str,
+    sensor: Sensor = "VJ1",
+    output_refs: str | Path = "data/refs/drag_partition.parquet",
+    cache_dir: str | None = None,
+    combine: str = "nested",
+) -> Path:
+    """Build a Kerchunk reference dataset using Earthaccess + VirtualiZarr.
+
+    This utility is intended for large date ranges where repeatedly opening
+    many native HDF/netCDF granules is expensive. It downloads granules once,
+    creates virtual references, and writes them to a Kerchunk JSON/Parquet
+    reference file for fast, lazy re-opening.
+    """
+    if sensor == "NESDIS":
+        raise ValueError("Virtual references are currently supported for NASA products only (MODIS/VNP/VJ1).")
+
+    if product_type not in PRODUCT_MAP[sensor]:
+        raise ValueError(f"Unsupported product_type '{product_type}' for sensor '{sensor}'.")
+
+    short_name = PRODUCT_MAP[sensor][product_type]
+    logger.info(
+        "Building virtual refs for %s (%s) from %s to %s...",
+        short_name,
+        sensor,
+        start_date,
+        end_date,
+    )
+
+    _ensure_earthdata_login()
+    results = earthaccess.search_data(
+        short_name=short_name,
+        cloud_hosted=True,
+        temporal=(start_date, end_date),
+    )
+
+    dt_s = datetime.strptime(start_date, "%Y-%m-%d")
+    dt_e = datetime.strptime(end_date, "%Y-%m-%d")
+    filtered_results = []
+    for r in results:
+        links = r.data_links()
+        g_date = _parse_vnp_doy_from_name(links[0]) if links else None
+        if g_date is None or dt_s <= g_date <= dt_e:
+            filtered_results.append(r)
+    results = filtered_results
+
+    if not results:
+        raise ValueError(f"No data found for {short_name} between {start_date} and {end_date}.")
+
+    local_cache = cache_dir or os.path.join(os.getcwd(), "data", "nasa")
+    os.makedirs(local_cache, exist_ok=True)
+    local_files = earthaccess.download(results, local_cache, threads=1)
+    local_files = [f for f in local_files if f and os.path.exists(f) and os.path.getsize(f) > 0]
+
+    if not local_files:
+        raise FileNotFoundError(f"Failed to download any valid files for {short_name}.")
+
+    try:
+        from virtualizarr import open_virtual_dataset
+        from virtualizarr.parsers import HDFParser
+        from virtualizarr.manifests import ManifestArray
+        from obstore.store import from_url
+        from obspec_utils.registry import ObjectStoreRegistry
+    except ImportError as e:
+        raise ImportError(
+            "VirtualiZarr dependencies are missing. Install extras with: "
+            "pip install -e '.[virtual]'"
+        ) from e
+
+    # VirtualiZarr expects URLs plus an object-store registry.
+    common_root = Path(os.path.commonpath([str(Path(f).resolve()) for f in local_files]))
+    root_url = common_root.as_uri()
+    store = from_url(root_url)
+    registry = ObjectStoreRegistry({root_url: store})
+    local_urls = [Path(f).resolve().as_uri() for f in local_files]
+
+    parser = HDFParser()
+    with warnings.catch_warnings():
+        # Known warning from zarr-v3 + numcodecs codec metadata during reference writing.
+        warnings.filterwarnings(
+            "ignore",
+            message="Numcodecs codecs are not in the Zarr version 3 specification*",
+            category=UserWarning,
+        )
+
+        vds_list = [
+            open_virtual_dataset(
+                url=u,
+                registry=registry,
+                parser=parser,
+                loadable_variables=["time"],
+                decode_times=True,
+            )
+            for u in local_urls
+        ]
+
+        if combine == "nested":
+            vds = xr.concat(
+                vds_list,
+                dim="time",
+                coords="minimal",
+                data_vars="all",
+                compat="override",
+            )
+        else:
+            vds = xr.combine_by_coords(vds_list, combine_attrs="drop_conflicts")
+
+    has_virtual_data = any(
+        isinstance(v.data, ManifestArray) for v in vds.data_vars.values()
+    )
+    if not has_virtual_data:
+        logger.warning(
+            "VirtualiZarr produced no ManifestArray variables for %s. "
+            "Falling back to Kerchunk HDF5 translation.",
+            short_name,
+        )
+        try:
+            from kerchunk.hdf import SingleHdf5ToZarr
+            from kerchunk.combine import MultiZarrToZarr
+        except ImportError as e:
+            raise RuntimeError(
+                "Virtual reference creation produced no ManifestArray variables, "
+                "and Kerchunk fallback is unavailable. Install with: pip install kerchunk"
+            ) from e
+
+        ordered_files = sorted(
+            local_files,
+            key=lambda p: (_parse_vnp_doy_from_name(str(p)) or datetime.min, str(p)),
+        )
+        time_values = [
+            (_parse_vnp_doy_from_name(str(f)) or datetime.min).strftime("%Y-%m-%d")
+            for f in ordered_files
+        ]
+
+        keep_tokens_map = {
+            "brdf": ["Parameter1", "Parameter3", "Percent_Snow", "Land_Water"],
+            "nbar": ["Nadir", "NBAR"],
+            "albedo": ["Albedo", "BSA", "WSA", "Percent_Snow"],
+            "ndvi": ["NDVI", "EVI", "pixel_reliability"],
+            "lai": ["LAI", "Fpar", "FPAR"],
+        }
+        keep_tokens = keep_tokens_map.get(product_type, [])
+
+        def _filter_refs(ref_doc: dict) -> dict:
+            refs = ref_doc.get("refs", {})
+            if not keep_tokens:
+                return ref_doc
+
+            # Identify array roots under Data Fields that match desired science variables.
+            selected_array_roots = set()
+            for k in refs:
+                if not k.endswith("/.zarray"):
+                    continue
+                if "Data Fields/" not in k:
+                    continue
+                if any(tok in k for tok in keep_tokens):
+                    selected_array_roots.add(k[: -len("/.zarray")])
+
+            filtered_refs = {}
+            for k, v in refs.items():
+                # Keep only global root metadata plus selected arrays and their chunks/attrs.
+                if k in {".zgroup", ".zattrs"}:
+                    filtered_refs[k] = v
+                    continue
+
+                if any(
+                    k == f"{root}/.zarray"
+                    or k == f"{root}/.zattrs"
+                    or k.startswith(f"{root}/")
+                    for root in selected_array_roots
+                ):
+                    filtered_refs[k] = v
+
+            ref_doc["refs"] = filtered_refs
+            return ref_doc
+
+        single_refs = [
+            _filter_refs(SingleHdf5ToZarr(f, inline_threshold=0).translate())
+            for f in ordered_files
+        ]
+        combined_refs = MultiZarrToZarr(
+            path=ordered_files,
+            indicts=single_refs,
+            concat_dims=["time"],
+            coo_map={"time": time_values},
+        ).translate()
+
+        output_refs = Path(output_refs)
+        output_refs.parent.mkdir(parents=True, exist_ok=True)
+        if output_refs.suffix.lower() == ".parquet":
+            output_refs = output_refs.with_suffix(".json")
+            logger.warning(
+                "Kerchunk fallback currently writes JSON refs. Using %s instead of parquet.",
+                output_refs,
+            )
+
+        with output_refs.open("w") as f:
+            json.dump(combined_refs, f)
+
+        logger.info("Wrote Kerchunk fallback references to %s", output_refs)
+        return output_refs
+
+    output_refs = Path(output_refs)
+    output_refs.parent.mkdir(parents=True, exist_ok=True)
+    fmt = "parquet" if output_refs.suffix.lower() == ".parquet" else "json"
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Numcodecs codecs are not in the Zarr version 3 specification*",
+            category=UserWarning,
+        )
+        vds.vz.to_kerchunk(str(output_refs), format=fmt)
+    logger.info("Wrote virtual references to %s", output_refs)
+    return output_refs
 
 def _parse_vnp_doy_from_name(name: str) -> datetime | None:
     # Extract DOY from filename (e.g., .A2021365.)
@@ -473,29 +704,31 @@ def _preprocess_vnp43(ds: xr.Dataset) -> xr.Dataset:
             continue
             
         v_low = v.lower()
-        if "ndvi" in v_low: 
+        if "ndvi" in v_low:
             new_name = "NDVI"
-        elif "evi2" in v_low: 
+        elif "evi2" in v_low:
             new_name = "EVI2"
-        elif "evi" in v_low: 
+        elif "evi" in v_low:
             new_name = "EVI"
-        elif "pixel reliability" in v_low: 
+        elif "pixel reliability" in v_low:
             new_name = "pixel_reliability"
         elif "parameter1" in v_low or "isotropic" in v_low:
-             # Extract band if present (e.g. M5, Band1, nir, vis)
-             band_match = re.search(r"_(M\d+|Band\d+|nir|vis|shortwave)$", v_low)
-             suffix = f"_{band_match.group(1)}" if band_match else ""
-             new_name = f"Isotropic{suffix}"
+            # Extract band if present (e.g. M5, Band1, nir, vis)
+            band_match = re.search(r"_(M\d+|Band\d+|nir|vis|shortwave)$", v_low)
+            suffix = f"_{band_match.group(1)}" if band_match else ""
+            new_name = f"Isotropic{suffix}"
         elif "parameter2" in v_low or "volumetric" in v_low:
-             band_match = re.search(r"_(M\d+|Band\d+|nir|vis|shortwave)$", v_low)
-             suffix = f"_{band_match.group(1)}" if band_match else ""
-             new_name = f"Volumetric{suffix}"
+            band_match = re.search(r"_(M\d+|Band\d+|nir|vis|shortwave)$", v_low)
+            suffix = f"_{band_match.group(1)}" if band_match else ""
+            new_name = f"Volumetric{suffix}"
         elif "parameter3" in v_low or "geometric" in v_low:
-             band_match = re.search(r"_(M\d+|Band\d+|nir|vis|shortwave)$", v_low)
-             suffix = f"_{band_match.group(1)}" if band_match else ""
-             new_name = f"Geometric{suffix}"
+            band_match = re.search(r"_(M\d+|Band\d+|nir|vis|shortwave)$", v_low)
+            suffix = f"_{band_match.group(1)}" if band_match else ""
+            new_name = f"Geometric{suffix}"
         elif "percent_snow" in v_low:
-             new_name = "Percent_Snow"
+            new_name = "Percent_Snow"
+        elif "land_water" in v_low or "landwater" in v_low or "land water" in v_low:
+            new_name = "Land_Water_Type"
         
         if new_name and new_name != v:
             # Check for name collisions with variables, coordinates, or newly assigned names

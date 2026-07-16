@@ -41,6 +41,16 @@ dev = [
     "mkdocstrings[python]",
     "mkdocs-material",
 ]
+virtual = [
+    "virtualizarr>=2.6.0",
+    "kerchunk>=0.2.7",
+    "obstore>=0.8.0",
+    "obspec-utils>=0.1.0",
+]
+
+[project.scripts]
+fengsha-drag-partition = "fengsha_prep.pipelines.drag_partition.cli:main"
+fengsha-build-virtual-refs = "fengsha_prep.pipelines.drag_partition.virtual_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

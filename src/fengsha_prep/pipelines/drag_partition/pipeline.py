@@ -36,6 +36,10 @@ def run_drag_partition_pipeline(
     use_lai: bool = True,
     output_dir: str | Path | None = None,
     ndvi_threshold: float = 0.15,
+    use_gvf_adjustment: bool = False,
+    use_ndvi_adjustment: bool = False,
+    vegetation_gamma: float = 1.0,
+    bare_threshold: float = 0.80,
     cleanup_downloads: bool = True,
     cache_dir: str | Path | None = None,
 ) -> xr.Dataset | list[Path]:
@@ -110,7 +114,13 @@ def run_drag_partition_pipeline(
 
                 ds_day = run_drag_partition_pipeline(
                     day_str, day_str, u10_wind, sensor, data_fetcher, use_lai, 
-                    output_dir=None, ndvi_threshold=ndvi_threshold, cache_dir=day_cache
+                    output_dir=None,
+                    ndvi_threshold=ndvi_threshold,
+                    use_gvf_adjustment=use_gvf_adjustment,
+                    use_ndvi_adjustment=use_ndvi_adjustment,
+                    vegetation_gamma=vegetation_gamma,
+                    bare_threshold=bare_threshold,
+                    cache_dir=day_cache,
                 )
 
                 logger.info(f"Saving {day_str} result to {out_path}...")
@@ -195,7 +205,18 @@ def run_drag_partition_pipeline(
         ds_gvf = data_fetcher("gvf", start_date, end_date, sensor, True, cache_dir=cache_dir)
 
     ds_results = calculate_drag_partition(
-        ds_brdf, ds_lai, ds_albedo=ds_albedo, ds_nbar=ds_nbar, ds_gvf=ds_gvf, ds_ndvi=ds_ndvi, use_lai=use_lai, ndvi_threshold=ndvi_threshold
+        ds_brdf,
+        ds_lai,
+        ds_albedo=ds_albedo,
+        ds_nbar=ds_nbar,
+        ds_gvf=ds_gvf,
+        ds_ndvi=ds_ndvi,
+        use_lai=use_lai,
+        ndvi_threshold=ndvi_threshold,
+        use_gvf_adjustment=use_gvf_adjustment,
+        use_ndvi_adjustment=use_ndvi_adjustment,
+        vegetation_gamma=vegetation_gamma,
+        bare_threshold=bare_threshold,
     )
 
     # Ensure the output has a time dimension/coordinate for the processed day
