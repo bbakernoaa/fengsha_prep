@@ -212,7 +212,7 @@ def calculate_drag_partition(
             if "isotropic" in v.lower() or "parameter1" in v.lower():
                 f_iso = ds_brdf[v]
                 break
-        
+
         # If still None, check if there are other albedo-like variables
         if f_iso is None:
             for v in ds_brdf.data_vars:
@@ -273,6 +273,10 @@ def calculate_drag_partition(
     gvf = get_var(ds_gvf, ["GVF"])
     if gvf is None: gvf = get_var(ds_gvf, ['gvf_4km'])
 
+    # Extract LAI if available
+    lai = get_var(ds_lai, ["LAI"])
+    if lai is None: lai = get_var(ds_lai, ["Lai"])
+
     ndvi = get_var(ds_ndvi, ["NDVI"])
     if ndvi is None: ndvi = get_var(ds_ndvi, ["EVI"])
 
@@ -283,48 +287,53 @@ def calculate_drag_partition(
 
     # Protect against unphysical zero or negative values in BRDF parameters
     safe_f_iso = f_iso.where(f_iso >= 0.001)
-    
-    # Heuristic fallback: if f_geo is missing or extremely close to 0 (<= 0.001), 
-    # we enforce a physical lower bound of 5% of the local background soil reflectance (f_iso).
-    safe_f_geo = f_geo.where(f_geo >= 0.001, safe_f_iso * 0.05)
+
+    # Tiny background micro-roughness fallback for f_geo when it is extremely close to zero or NaN
+    # to account for grain-scale aeolian roughness, keeping the bare sand drag close to smooth (R ≈ 0.98).
+    safe_f_geo = f_geo.where(f_geo >= 0.0001, 0.0001).fillna(0.0001)
 
     # Option 2: Normalizing f_iso with color using damped coupling (k=0.5)
     # This prevents darker soils from artificially inflating the estimated roughness.
     f_iso_ref = 0.30
     color_normalized_denominator = np.sqrt(safe_f_iso * f_iso_ref)
-    
-    # Calculate frontal area index (lam) with a safe clip limit
-    lam = (1.25 * safe_f_geo / color_normalized_denominator).clip(0, 2)
 
-    # Bare surface drag (Raupach-style drag partition based on color-normalized lam)
-    term2 = (1 - 0.5 * lam) * (1 + 45 * lam)
-    ra_bare = 1 / np.sqrt(term2.clip(min=0.001))
+    # Calculate solid/rock frontal area index (lam_solid) with a safe clip limit
+    lam_solid = (1.25 * safe_f_geo / color_normalized_denominator).clip(0, 2)
 
-    # Non-linear washout protection for partially vegetated transition zones.
-    if vegetation_gamma != 1.0:
-        normalized_lower = ra_bare / bare_threshold
-        adjusted_lower = (normalized_lower ** vegetation_gamma) * bare_threshold
-        ra_bare = xr.where(ra_bare >= bare_threshold, ra_bare, adjusted_lower)
+    # Bare surface/rock drag partition (feff_r, Raupach-style)
+    term2_r = (1 - 0.5 * lam_solid) * (1 + 45 * lam_solid)
+    feff_r = 1 / np.sqrt(term2_r.clip(min=0.001))
 
-    # Vegetation masking
-    if gvf is not None and use_gvf_adjustment:
-        logger.info("Applying soft GVF attenuation with dense-vegetation mask (< 0.6)...")
-        feff = ra_bare * (1.0 - gvf.clip(0, 1))
-        feff = feff.where(gvf < 0.6)
-    elif gvf is not None and not use_gvf_adjustment:
-        logger.info("GVF adjustment disabled; using BRDF-only drag.")
-        feff = ra_bare
-    elif ndvi is not None and use_ndvi_adjustment:
-        logger.info(f"Applying soft NDVI/EVI attenuation with mask (< {ndvi_threshold})...")
-        veg_fraction = ((ndvi - 0.1) / (ndvi_threshold - 0.1)).clip(0, 1)
-        feff = ra_bare * (1.0 - veg_fraction)
-        feff = feff.where(ndvi < ndvi_threshold)
-    elif ndvi is not None and not use_ndvi_adjustment:
-        logger.info("NDVI/EVI adjustment disabled; using BRDF-only drag where GVF is unavailable.")
-        feff = ra_bare
+    # Determine vegetation cover fraction (f_v) using VAI (LAI) or GVF/NDVI as a proxy,
+    # prioritizing unmasked NDVI to prevent dry desert zero-masking issues.
+    if lai is not None:
+        f_v = (lai / 1.0).clip(0, 1)
+    elif gvf is not None:
+        f_v = gvf.clip(0, 1)
+    elif ndvi is not None:
+        f_v = ((ndvi - 0.05) / (0.80 - 0.05)).clip(0, 1)
     else:
-        logger.warning("No vegetation mask (GVF or NDVI) applied.")
-        feff = ra_bare
+        f_v = xr.zeros_like(safe_f_iso)
+
+    # Calculate vegetation drag partition (feff_v) using Okin [2008] / Pierre et al. [2014]
+    # K is the normalized mean gap length between obstacles
+    safe_f_v = f_v.where(f_v >= 0.0001)
+    K = 2.0 * (1.0 / safe_f_v - 1.0)
+    feff_v = xr.where(f_v >= 0.0001, (K + 1.536) / (K + 4.8), 1.0)
+
+    # Non-linear washout protection for partially vegetated transition zones (applied to feff_r).
+    if vegetation_gamma != 1.0:
+        normalized_lower = feff_r / bare_threshold
+        adjusted_lower = (normalized_lower ** vegetation_gamma) * bare_threshold
+        feff_r = xr.where(feff_r >= bare_threshold, feff_r, adjusted_lower)
+
+    # Combine solid (feff_r) and vegetation (feff_v) drag partition factors 
+    # using the Leung et al. [2023] cubic weighted mean: F_eff^3 = (1 - f_v) * feff_r^3 + f_v * feff_v^3
+    feff = ((1.0 - f_v) * (feff_r ** 3) + f_v * (feff_v ** 3)) ** (1.0 / 3.0)
+
+    # For compatibility with downstream outputs and tests
+    ra_bare = feff_r
+    lam = lam_solid
 
     # E. Snow Masking
     snow = get_var(ds_brdf, ["Percent_Snow"])
