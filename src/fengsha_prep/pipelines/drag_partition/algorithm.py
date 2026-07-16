@@ -295,13 +295,13 @@ def calculate_drag_partition(
     # Option 2: Normalizing f_iso with color using damped coupling (k=0.5)
     # This prevents darker soils from artificially inflating the estimated roughness.
     f_iso_ref = 0.30
-    color_normalized_denominator = np.sqrt(safe_f_iso * f_iso_ref)
+    color_normalized_denominator = safe_f_iso# np.sqrt(safe_f_iso * f_iso_ref)
 
     # Calculate solid/rock frontal area index (lam_solid) with a safe clip limit
     lam_solid = (1.25 * safe_f_geo / color_normalized_denominator).clip(0, 2)
 
     # Bare surface/rock drag partition (feff_r, Raupach-style)
-    term2_r = (1 - 0.5 * lam_solid) * (1 + 45 * lam_solid)
+    term2_r = (1 - 1.45*0.16 * lam_solid) * (1 + 0.16*202 * lam_solid)
     feff_r = 1 / np.sqrt(term2_r.clip(min=0.001))
 
     # Determine vegetation cover fraction (f_v) using VAI (LAI) or GVF/NDVI as a proxy,
@@ -311,7 +311,7 @@ def calculate_drag_partition(
     elif gvf is not None:
         f_v = gvf.clip(0, 1)
     elif ndvi is not None:
-        f_v = ((ndvi - 0.05) / (0.80 - 0.05)).clip(0, 1)
+        f_v = ((ndvi - 0.01) / (0.80 - 0.01)).clip(0, 1)
     else:
         f_v = xr.zeros_like(safe_f_iso)
 
@@ -327,7 +327,7 @@ def calculate_drag_partition(
         adjusted_lower = (normalized_lower ** vegetation_gamma) * bare_threshold
         feff_r = xr.where(feff_r >= bare_threshold, feff_r, adjusted_lower)
 
-    # Combine solid (feff_r) and vegetation (feff_v) drag partition factors 
+    # Combine solid (feff_r) and vegetation (feff_v) drag partition factors
     # using the Leung et al. [2023] cubic weighted mean: F_eff^3 = (1 - f_v) * feff_r^3 + f_v * feff_v^3
     feff = ((1.0 - f_v) * (feff_r ** 3) + f_v * (feff_v ** 3)) ** (1.0 / 3.0)
 
