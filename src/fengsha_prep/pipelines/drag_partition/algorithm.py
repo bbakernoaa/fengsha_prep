@@ -283,7 +283,10 @@ def calculate_drag_partition(
 
     # Protect against unphysical zero or negative values in BRDF parameters
     safe_f_iso = f_iso.where(f_iso >= 0.001)
-    safe_f_geo = f_geo.where(f_geo >= 0.000).fillna(0.0)
+    
+    # Heuristic fallback: if f_geo is missing or extremely close to 0 (<= 0.001), 
+    # we enforce a physical lower bound of 5% of the local background soil reflectance (f_iso).
+    safe_f_geo = f_geo.where(f_geo >= 0.001, safe_f_iso * 0.05)
 
     # Option 2: Normalizing f_iso with color using damped coupling (k=0.5)
     # This prevents darker soils from artificially inflating the estimated roughness.
