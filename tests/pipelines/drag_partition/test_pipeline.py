@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, ANY
 
 import pytest
 import xarray as xr
@@ -32,11 +32,13 @@ def test_run_drag_partition_pipeline_integration_modis(mock_data_fetcher):
         start_date, end_date, sensor="MODIS", data_fetcher=mock_data_fetcher
     )
 
-    # Assert that the data_fetcher was called three times (brdf, nbar, lai)
-    assert mock_data_fetcher.call_count == 3
-    mock_data_fetcher.assert_any_call("brdf", start_date, end_date, "MODIS")
-    mock_data_fetcher.assert_any_call("nbar", start_date, end_date, "MODIS")
-    mock_data_fetcher.assert_any_call("lai", start_date, end_date, "MODIS")
+    # Assert that the data_fetcher was called 5 times (brdf, albedo, nbar, lai, gvf)
+    assert mock_data_fetcher.call_count == 5
+    mock_data_fetcher.assert_any_call("brdf", start_date, end_date, "MODIS", False, cache_dir=None)
+    mock_data_fetcher.assert_any_call("albedo", start_date, end_date, "MODIS", True, cache_dir=None)
+    mock_data_fetcher.assert_any_call("nbar", start_date, end_date, "MODIS", True, cache_dir=None)
+    mock_data_fetcher.assert_any_call("lai", start_date, end_date, "MODIS", True, cache_dir=None)
+    mock_data_fetcher.assert_any_call("gvf", start_date, end_date, "MODIS", True, cache_dir=None)
 
 
 def test_run_drag_partition_pipeline_integration_vnp(mock_data_fetcher):
@@ -47,11 +49,11 @@ def test_run_drag_partition_pipeline_integration_vnp(mock_data_fetcher):
         start_date, end_date, sensor="VNP", data_fetcher=mock_data_fetcher
     )
 
-    # Assert that the data_fetcher was called correctly
-    mock_data_fetcher.assert_any_call("brdf", start_date, end_date, "VNP", False)
-    mock_data_fetcher.assert_any_call("nbar", start_date, end_date, "VNP", True)
-    mock_data_fetcher.assert_any_call("lai", start_date, end_date, "VNP", True)
-    mock_data_fetcher.assert_any_call("ndvi", start_date, end_date, "VNP", True)
+    # Assert that the data_fetcher was called 3 times (brdf, lai, ndvi)
+    assert mock_data_fetcher.call_count == 3
+    mock_data_fetcher.assert_any_call("brdf", start_date, end_date, "VNP", False, cache_dir=None)
+    mock_data_fetcher.assert_any_call("lai", start_date, end_date, "VNP", True, cache_dir=None)
+    mock_data_fetcher.assert_any_call("ndvi", start_date, end_date, "VNP", True, cache_dir=None)
 
 
 def test_run_drag_partition_pipeline_integration_nesdis(mock_data_fetcher):
@@ -60,7 +62,7 @@ def test_run_drag_partition_pipeline_integration_nesdis(mock_data_fetcher):
     end_date = "2024-01-07"
 
     # Define a side_effect to return different datasets for different products
-    def side_effect(product, *args):
+    def side_effect(product, start_date_val, end_date_val, sensor_val, is_scaled, cache_dir=None):
         if product == "brdf":
             return xr.Dataset({"Albedo_BSA_M5": (("y", "x"), [[0.15]])})
         elif product == "nbar":
@@ -77,9 +79,10 @@ def test_run_drag_partition_pipeline_integration_nesdis(mock_data_fetcher):
         start_date, end_date, sensor="NESDIS", data_fetcher=mock_data_fetcher
     )
 
-    # Assert that the data_fetcher was called four times (brdf, nbar, lai, gvf)
-    assert mock_data_fetcher.call_count == 4
-    mock_data_fetcher.assert_any_call("brdf", start_date, end_date, "NESDIS")
-    mock_data_fetcher.assert_any_call("nbar", start_date, end_date, "NESDIS")
-    mock_data_fetcher.assert_any_call("lai", start_date, end_date, "NESDIS")
-    mock_data_fetcher.assert_any_call("gvf", start_date, end_date, "NESDIS")
+    # Assert that the data_fetcher was called five times (brdf, albedo, nbar, lai, gvf)
+    assert mock_data_fetcher.call_count == 5
+    mock_data_fetcher.assert_any_call("brdf", start_date, end_date, "NESDIS", False, cache_dir=None)
+    mock_data_fetcher.assert_any_call("albedo", start_date, end_date, "NESDIS", True, cache_dir=None)
+    mock_data_fetcher.assert_any_call("nbar", start_date, end_date, "NESDIS", True, cache_dir=None)
+    mock_data_fetcher.assert_any_call("lai", start_date, end_date, "NESDIS", True, cache_dir=None)
+    mock_data_fetcher.assert_any_call("gvf", start_date, end_date, "NESDIS", True, cache_dir=None)

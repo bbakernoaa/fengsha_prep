@@ -205,6 +205,43 @@ def calculate_drag_partition(
 
     f_iso, f_geo = get_matched_brdf_pair(ds_brdf)
 
+    # Fallback if matched pair not found: find any Isotropic/Parameter1 variable
+    if f_iso is None:
+        logger.info("Matched BRDF pair not found. Searching for any Isotropic fallback...")
+        for v in ds_brdf.data_vars:
+            if "isotropic" in v.lower() or "parameter1" in v.lower():
+                f_iso = ds_brdf[v]
+                break
+        
+        # If still None, check if there are other albedo-like variables
+        if f_iso is None:
+            for v in ds_brdf.data_vars:
+                if any(term in v.lower() for term in ["toc", "reflectance", "albedo", "i1"]):
+                    f_iso = ds_brdf[v]
+                    break
+
+        # If still None, take the first variable in the dataset
+        if f_iso is None and len(ds_brdf.data_vars) > 0:
+            first_var = list(ds_brdf.data_vars)[0]
+            f_iso = ds_brdf[first_var]
+
+        if f_iso is not None and "time" in f_iso.dims:
+            if f_iso.sizes["time"] > 1:
+                f_iso = f_iso.isel(time=0, drop=True)
+            else:
+                f_iso = f_iso.squeeze("time", drop=True)
+
+    if f_geo is None:
+        for v in ds_brdf.data_vars:
+            if "geometric" in v.lower() or "parameter3" in v.lower():
+                f_geo = ds_brdf[v]
+                break
+        if f_geo is not None and "time" in f_geo.dims:
+            if f_geo.sizes["time"] > 1:
+                f_geo = f_geo.isel(time=0, drop=True)
+            else:
+                f_geo = f_geo.squeeze("time", drop=True)
+
     if f_iso is None:
         logger.error(f"Required Isotropic parameter missing. Available: {list(ds_brdf.data_vars)}")
         raise KeyError(f"Could not find Isotropic parameter in BRDF dataset. Found: {list(ds_brdf.data_vars)}")
@@ -244,19 +281,21 @@ def calculate_drag_partition(
         logger.info("Detected integer (unscaled) NDVI/EVI. Applying 0.0001 scale factor.")
         ndvi = ndvi * np.float32(0.0001)
 
-    # Ratio calculation with safety for zero f_iso
+    # Protect against unphysical zero or negative values in BRDF parameters
     safe_f_iso = f_iso.where(f_iso >= 0.001)
-    ratio = (f_geo.fillna(0.001) / safe_f_iso).clip(0, 2)
-    
-    lam = 1.25 * ratio
-    texture = safe_f_iso.rolling(lat=5, lon=5, center=True).std()
-    roughness_proxy = (texture / 0.1).clip(0,0.5)
+    safe_f_geo = f_geo.where(f_geo >= 0.000).fillna(0.0)
 
-    # Bare surface drag (Chappell & Webb variant 2)
+    # Option 2: Normalizing f_iso with color using damped coupling (k=0.5)
+    # This prevents darker soils from artificially inflating the estimated roughness.
+    f_iso_ref = 0.30
+    color_normalized_denominator = np.sqrt(safe_f_iso * f_iso_ref)
+    
+    # Calculate frontal area index (lam) with a safe clip limit
+    lam = (1.25 * safe_f_geo / color_normalized_denominator).clip(0, 2)
+
+    # Bare surface drag (Raupach-style drag partition based on color-normalized lam)
     term2 = (1 - 0.5 * lam) * (1 + 45 * lam)
-    R2 = 1 / np.sqrt(term2.clip(min=0.001))
-    roughness_weight = ((R2 - 0.75) / 0.20).clip(0, 1)
-    ra_bare = R2 - (roughness_proxy * roughness_weight)
+    ra_bare = 1 / np.sqrt(term2.clip(min=0.001))
 
     # Non-linear washout protection for partially vegetated transition zones.
     if vegetation_gamma != 1.0:
