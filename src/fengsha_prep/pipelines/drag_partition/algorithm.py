@@ -304,22 +304,28 @@ def calculate_drag_partition(
     term2_r = (1 - 1.45*0.16 * lam_solid) * (1 + 0.16*202 * lam_solid)
     feff_r = 1 / np.sqrt(term2_r.clip(min=0.001))
 
-    # Determine vegetation cover fraction (f_v) using VAI (LAI) or GVF/NDVI as a proxy,
-    # prioritizing unmasked NDVI to prevent dry desert zero-masking issues.
-    if lai is not None:
-        f_v = (lai / 1.0).clip(0, 1)
+    # Determine GVF proxy (vegetation cover fraction) using unmasked NDVI,
+    # scaling NDVI locally over arid-regions to reach 100% cover at 0.35 NDVI.
+    gvf_proxy = None
+    if ndvi is not None:
+        gvf_proxy = ((ndvi - 0.01) / (0.35 - 0.01)).clip(0, 1)
     elif gvf is not None:
-        f_v = gvf.clip(0, 1)
-    elif ndvi is not None:
-        f_v = ((ndvi - 0.01) / (0.80 - 0.01)).clip(0, 1)
+        gvf_proxy = gvf.clip(0, 1)
+    elif lai is not None:
+        gvf_proxy = (lai / 1.0).clip(0, 1)
+
+    # Determine f_v by applying a non-linear GVF-to-fv scaling (square root)
+    # to reflect that even tiny GVF fractions create large sheltering wakes.
+    if gvf_proxy is not None:
+        f_v = gvf_proxy ** 0.5
     else:
         f_v = xr.zeros_like(safe_f_iso)
 
     # Calculate vegetation drag partition (feff_v) using Okin [2008] / Pierre et al. [2014]
-    # K is the normalized mean gap length between obstacles
+    # with an increased wake constant c = 15.0 to represent larger wind shelters behind desert plants.
     safe_f_v = f_v.where(f_v >= 0.0001)
     K = 2.0 * (1.0 / safe_f_v - 1.0)
-    feff_v = xr.where(f_v >= 0.0001, (K + 1.536) / (K + 4.8), 1.0)
+    feff_v = xr.where(f_v >= 0.0001, (K + 4.8) / (K + 15.0), 1.0)
 
     # Non-linear washout protection for partially vegetated transition zones (applied to feff_r).
     if vegetation_gamma != 1.0:
