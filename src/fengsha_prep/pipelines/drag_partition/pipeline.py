@@ -139,11 +139,6 @@ def run_drag_partition_pipeline(
                     for var in list(ds_day.data_vars) + list(ds_day.coords):
                         ds_day[var].encoding = {}
 
-                    # Configure default high-performance compressor (Blosc-zstd) for all data variables
-                    import numcodecs
-                    compressor = numcodecs.Blosc(cname="zstd", clevel=5, shuffle=numcodecs.Blosc.SHUFFLE)
-                    encoding = {var: {"compressor": compressor} for var in ds_day.data_vars}
-
                     # Re-chunk for optimal performance and chunk sizes
                     chunks = {}
                     if "time" in ds_day.dims:
@@ -156,7 +151,7 @@ def run_drag_partition_pipeline(
                     if chunks:
                         ds_day = ds_day.chunk(chunks)
                     
-                    ds_day.to_zarr(out_path, mode="w", encoding=encoding)
+                    ds_day.to_zarr(out_path, mode="w")
                 else:
                     encoding = {var: {"zlib": True, "complevel": 5} for var in ds_day.data_vars}
                     # Write to a temp file in the same directory then atomically rename
