@@ -66,6 +66,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional cache directory for fetched inputs.",
     )
     parser.add_argument(
+        "--output-format",
+        choices=["netcdf", "zarr"],
+        default="netcdf",
+        help="Output file format (netcdf or zarr).",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -98,6 +104,7 @@ def main() -> None:
         bare_threshold=args.bare_threshold,
         cleanup_downloads=not args.no_cleanup_downloads,
         cache_dir=Path(args.cache_dir) if args.cache_dir else None,
+        output_format=args.output_format,
     )
 
     if isinstance(result, list):

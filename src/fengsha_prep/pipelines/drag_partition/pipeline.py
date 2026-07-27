@@ -19,7 +19,7 @@ except ImportError:
     get_client = None
 
 from .algorithm import calculate_drag_partition
-from .io import get_cmg_data
+from .io import get_cmg_data, load_prigent_drag_partition
 
 # Set up a logger for the module
 logger = logging.getLogger(__name__)
@@ -40,8 +40,10 @@ def run_drag_partition_pipeline(
     use_ndvi_adjustment: bool = False,
     vegetation_gamma: float = 1.0,
     bare_threshold: float = 0.80,
+    prigent_path: str | Path | None = "PRIGENT_ET_AL_DRAGPARTITION.nc",
     cleanup_downloads: bool = True,
     cache_dir: str | Path | None = None,
+    output_format: str = "netcdf",
 ) -> xr.Dataset | list[Path]:
     """Automated pipeline to fetch data and calculate the effective drag (feff).
 
@@ -95,9 +97,10 @@ def run_drag_partition_pipeline(
         # Collect tasks for missing days
         tasks = []
         current = dt_start
+        ext = "nc" if output_format == "netcdf" else "zarr"
         while current <= dt_end:
             day_str = current.strftime("%Y-%m-%d")
-            out_path = output_dir / f"drag_partition_{sensor}_{day_str}.nc"
+            out_path = output_dir / f"drag_partition_{sensor}_{day_str}.{ext}"
             if not out_path.exists():
                 tasks.append((day_str, out_path))
             else:
@@ -108,38 +111,57 @@ def run_drag_partition_pipeline(
             logger.info(f"Processing {len(tasks)} days sequentially...")
             for day_str, out_path in tasks:
                 logger.info(f"--- Processing Day: {day_str} ---")
-                
+
                 # Use a temporary subdirectory to isolate downloads for this day
                 day_cache = Path("data") / f"tmp_{day_str}" if cleanup_downloads else None
 
                 ds_day = run_drag_partition_pipeline(
-                    day_str, day_str, u10_wind, sensor, data_fetcher, use_lai, 
+                    day_str, day_str, u10_wind, sensor, data_fetcher, use_lai,
                     output_dir=None,
                     ndvi_threshold=ndvi_threshold,
                     use_gvf_adjustment=use_gvf_adjustment,
                     use_ndvi_adjustment=use_ndvi_adjustment,
                     vegetation_gamma=vegetation_gamma,
                     bare_threshold=bare_threshold,
+                    prigent_path=prigent_path,
                     cache_dir=day_cache,
+                    output_format=output_format,
                 )
 
                 logger.info(f"Saving {day_str} result to {out_path}...")
                 # Load into memory first to release HDF5 source file handles before writing.
                 ds_day = ds_day.load()
-                encoding = {var: {"zlib": True, "complevel": 5} for var in ds_day.data_vars}
-                # Write to a temp file in the same directory then atomically rename
-                # so a failed write never leaves a corrupt file that blocks future runs.
-                tmp_fd, tmp_path = tempfile.mkstemp(
-                    suffix=".nc.tmp", dir=out_path.parent
-                )
-                os.close(tmp_fd)
-                try:
-                    ds_day.to_netcdf(tmp_path, encoding=encoding, engine="h5netcdf")
-                    os.replace(tmp_path, out_path)
-                except Exception:
-                    Path(tmp_path).unlink(missing_ok=True)
-                    raise
-                
+
+                if output_format == "zarr":
+                    logger.info(f"Writing Zarr dataset to {out_path} with proper chunking...")
+                    # Re-chunk for optimal performance and chunk sizes
+                    chunks = {}
+                    if "time" in ds_day.dims:
+                        chunks["time"] = 1
+                    if "lat" in ds_day.dims:
+                        chunks["lat"] = 1800
+                    if "lon" in ds_day.dims:
+                        chunks["lon"] = 3600
+                    
+                    if chunks:
+                        ds_day = ds_day.chunk(chunks)
+                    
+                    ds_day.to_zarr(out_path, mode="w")
+                else:
+                    encoding = {var: {"zlib": True, "complevel": 5} for var in ds_day.data_vars}
+                    # Write to a temp file in the same directory then atomically rename
+                    # so a failed write never leaves a corrupt file that blocks future runs.
+                    tmp_fd, tmp_path = tempfile.mkstemp(
+                        suffix=".nc.tmp", dir=out_path.parent
+                    )
+                    os.close(tmp_fd)
+                    try:
+                        ds_day.to_netcdf(tmp_path, encoding=encoding, engine="h5netcdf")
+                        os.replace(tmp_path, out_path)
+                    except Exception:
+                        Path(tmp_path).unlink(missing_ok=True)
+                        raise
+
                 if cleanup_downloads and day_cache and day_cache.exists():
                     import shutil
                     logger.info(f"Cleaning up temporary downloads for {day_str}...")
@@ -160,7 +182,7 @@ def run_drag_partition_pipeline(
         current = dt_start
         while current <= dt_end:
             day_str = current.strftime("%Y-%m-%d")
-            saved_paths.append(output_dir / f"drag_partition_{sensor}_{day_str}.nc")
+            saved_paths.append(output_dir / f"drag_partition_{sensor}_{day_str}.{ext}")
             current += timedelta(days=1)
         return saved_paths
 
@@ -204,6 +226,13 @@ def run_drag_partition_pipeline(
         logger.info(f"Fetching {sensor} GVF data...")
         ds_gvf = data_fetcher("gvf", start_date, end_date, sensor, True, cache_dir=cache_dir)
 
+    ds_prigent = None
+    if prigent_path:
+        try:
+            ds_prigent = load_prigent_drag_partition(prigent_path)
+        except FileNotFoundError:
+            logger.warning(f"Prigent drag partition file not found at {prigent_path}. Skipping.")
+
     ds_results = calculate_drag_partition(
         ds_brdf,
         ds_lai,
@@ -211,6 +240,7 @@ def run_drag_partition_pipeline(
         ds_nbar=ds_nbar,
         ds_gvf=ds_gvf,
         ds_ndvi=ds_ndvi,
+        ds_prigent=ds_prigent,
         use_lai=use_lai,
         ndvi_threshold=ndvi_threshold,
         use_gvf_adjustment=use_gvf_adjustment,
