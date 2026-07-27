@@ -134,6 +134,11 @@ def run_drag_partition_pipeline(
 
                 if output_format == "zarr":
                     logger.info(f"Writing Zarr dataset to {out_path} with proper chunking...")
+                    # Clear variable and coordinate encodings to prevent Zarr write/encoding failures
+                    # (such as ValueError from un-hashable or array _FillValue left from HDF5 metadata)
+                    for var in list(ds_day.data_vars) + list(ds_day.coords):
+                        ds_day[var].encoding = {}
+
                     # Re-chunk for optimal performance and chunk sizes
                     chunks = {}
                     if "time" in ds_day.dims:
