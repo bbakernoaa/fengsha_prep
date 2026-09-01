@@ -599,9 +599,15 @@ def apply_regional_taklamakan_tuning(f_eff_r_global, lat_array, lon_array, multi
         (lon_array >= 75.0) & (lon_array <= 90.0)
     )
 
-    # 2. Apply the 10% scaling increase strictly inside the masked domain
+    chad_mask = (
+        (lat_array >= 14.5) & (lat_array <= 21) &
+        (lon_array >= 7.6) & (lon_array <= 33.0)
+    )
+
+    # 2. Apply the scaling increase strictly inside the masked domains
     # Outside the mask, the baseline global values remain completely untouched
-    f_eff_r_tuned = xr.where(taklamakan_mask, f_eff_r_global * multiplier, f_eff_r_global)
+    f_eff_r_tuned = xr.where(taklamakan_mask | chad_mask, f_eff_r_global * multiplier, f_eff_r_global)
+    # f_eff_r_tuned = xr.where(chad_mask, f_eff_r_tuned * multiplier, f_eff_r_tuned)
 
     # 3. Guardrail: Enforce the physical boundary limit (f_eff cannot exceed 1.0)
     return f_eff_r_tuned.clip(max=1.0)
