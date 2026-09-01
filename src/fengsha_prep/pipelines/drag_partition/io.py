@@ -173,15 +173,15 @@ _EARTHDATA_LOGGED_IN = False
 
 def _ensure_earthdata_login():
     """Ensures that we are logged into Earthdata.
-    
-    This is especially important for Dask workers which may not share 
-    the session state of the local process. Uses a global flag to 
+
+    This is especially important for Dask workers which may not share
+    the session state of the local process. Uses a global flag to
     minimize redundant calls within the same process.
     """
     global _EARTHDATA_LOGGED_IN
     if _EARTHDATA_LOGGED_IN:
         return True
-        
+
     try:
         # Try to login non-interactively first (for workers)
         auth = earthaccess.login(persist=True)
@@ -190,15 +190,60 @@ def _ensure_earthdata_login():
             return True
     except Exception as e:
         logger.debug(f"Non-interactive login attempt failed: {e}")
-        
+
     # Final fallback attempt
     auth = earthaccess.login()
     if auth:
         _EARTHDATA_LOGGED_IN = True
         return True
-        
+
     logger.warning("Earthdata login failed. Downloads may fail if not already authenticated via environment or netrc.")
     return False
+
+def load_prigent_drag_partition(file_path: str | Path = "PRIGENT_ET_AL_DRAGPARTITION.nc") -> xr.Dataset:
+    """Loads the Prigent et al. Drag Partition dataset.
+
+    Parameters
+    ----------
+    file_path : str | Path, optional
+        Path to the NetCDF file. Defaults to "PRIGENT_ET_AL_DRAGPARTITION.nc".
+
+    Returns
+    -------
+    xr.Dataset
+        The loaded dataset.
+    """
+    logger.info(f"Loading Prigent drag partition from {file_path}...")
+    if not Path(file_path).exists():
+        logger.error(f"Prigent drag partition file not found: {file_path}")
+        raise FileNotFoundError(f"Prigent drag partition file not found: {file_path}")
+
+    ds = xr.open_dataset(file_path)
+
+    # Rename the static partition field to a canonical name. The published file
+    # stores it as "PRIGENT_RDRAG", but earlier variants used "PRIGENT_DRAG" and
+    # "drag_partition", so match on any known token instead of an exact name.
+    if "drag_partition" not in ds.data_vars:
+        canonical = next(
+            (v for v in ds.data_vars if any(t in str(v).lower() for t in ("drag", "prigent"))),
+            None,
+        )
+        if canonical is not None:
+            logger.debug(f"Renaming Prigent variable {canonical!r} to 'drag_partition'.")
+            ds = ds.rename({canonical: "drag_partition"})
+        else:
+            logger.warning(
+                f"Could not identify the drag partition variable in {file_path}. "
+                f"Available: {list(ds.data_vars)}"
+            )
+
+    # Ensure latitude is descending (North to South) to match NASA CMG standards
+    if "lat" in ds.coords and ds.lat.size > 0:
+        if ds.lat.values[0] < ds.lat.values[-1]:
+            logger.debug("Flipping Prigent latitude to descending orientation.")
+            ds = ds.sortby("lat", ascending=False)
+
+    return ds
 
 
 def get_cmg_data(
@@ -328,9 +373,9 @@ def get_cmg_data(
                 elif "13C1" in short_name: group = "/HDFEOS/GRIDS/VIIRS_CMG_VegIndices/Data Fields"
 
             logger.info(f"Opening VIIRS CMG with group: {group} (engine: h5netcdf)")
-            
+
             # Use h5netcdf engine with phony_dims='sort' for better stability and coordinate alignment.
-            # We disable parallel=True here to avoid malloc/segfault issues on certain systems 
+            # We disable parallel=True here to avoid malloc/segfault issues on certain systems
             # with HDF5/netCDF4 C library interactions.
             try:
                 with warnings.catch_warnings():
@@ -345,7 +390,7 @@ def get_cmg_data(
                         backend_kwargs={"phony_dims": "sort"},
                         chunks={"lat": 1800, "lon": 3600},
                     )
-                
+
                 # DIAGNOSTIC: Log all available variables before filtering
                 logger.info(f"Available variables in {product_type} ({group}): {list(ds.data_vars)}")
 
@@ -384,7 +429,7 @@ def get_cmg_data(
                                 if "m" in v_low and "m7" not in v_low:
                                     continue
                             actual_vars.append(v)
-                    
+
                     if actual_vars:
                         ds = ds[actual_vars]
                         logger.debug(f"Reduced {product_type} dataset to variables: {list(ds.data_vars)}")
@@ -702,7 +747,7 @@ def _preprocess_vnp43(ds: xr.Dataset) -> xr.Dataset:
         new_name = None
         if "std dev" in v.lower():
             continue
-            
+
         v_low = v.lower()
         if "ndvi" in v_low:
             new_name = "NDVI"
@@ -715,21 +760,27 @@ def _preprocess_vnp43(ds: xr.Dataset) -> xr.Dataset:
         elif "parameter1" in v_low or "isotropic" in v_low:
             # Extract band if present (e.g. M5, Band1, nir, vis)
             band_match = re.search(r"_(M\d+|Band\d+|nir|vis|shortwave)$", v_low)
-            suffix = f"_{band_match.group(1)}" if band_match else ""
-            new_name = f"Isotropic{suffix}"
+            band = band_match.group(1) if band_match else ""
+            if band and band.lower() != "m7": # Only keep M7 for NASA VIIRS
+                 continue
+            new_name = f"Isotropic_{band}" if band else "Isotropic"
         elif "parameter2" in v_low or "volumetric" in v_low:
             band_match = re.search(r"_(M\d+|Band\d+|nir|vis|shortwave)$", v_low)
-            suffix = f"_{band_match.group(1)}" if band_match else ""
-            new_name = f"Volumetric{suffix}"
+            band = band_match.group(1) if band_match else ""
+            if band and band.lower() != "m7":
+                 continue
+            new_name = f"Volumetric_{band}" if band else "Volumetric"
         elif "parameter3" in v_low or "geometric" in v_low:
             band_match = re.search(r"_(M\d+|Band\d+|nir|vis|shortwave)$", v_low)
-            suffix = f"_{band_match.group(1)}" if band_match else ""
-            new_name = f"Geometric{suffix}"
+            band = band_match.group(1) if band_match else ""
+            if band and band.lower() != "m7":
+                 continue
+            new_name = f"Geometric_{band}" if band else "Geometric"
         elif "percent_snow" in v_low:
             new_name = "Percent_Snow"
         elif "land_water" in v_low or "landwater" in v_low or "land water" in v_low:
             new_name = "Land_Water_Type"
-        
+
         if new_name and new_name != v:
             # Check for name collisions with variables, coordinates, or newly assigned names
             if new_name in ds.variables or new_name in new_data_vars.values():
@@ -737,7 +788,7 @@ def _preprocess_vnp43(ds: xr.Dataset) -> xr.Dataset:
             else:
                 logger.debug(f"Renaming variable '{v}' to '{new_name}'")
                 new_data_vars[v] = new_name
-            
+
     if new_data_vars:
         ds = ds.rename(new_data_vars)
 
